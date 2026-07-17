@@ -2,6 +2,7 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 from legacy_order_runner import main as run_legacy_order
+from modules.orders.order_page import OrderPage
 
 
 class MainWindow:
@@ -211,13 +212,8 @@ class MainWindow:
         status_bar.pack(fill="x", side="bottom")
 
     def open_orders(self) -> None:
-        messagebox.showinfo(
-            "주문관리",
-            "주문관리 화면은 다음 단계에서 연결합니다.\n\n"
-            "현재는 대시보드의 빠른 실행 버튼으로 "
-            "기존 주문 발주 기능을 사용할 수 있습니다.",
-        )
-
+        OrderPage(self.root)
+        
     def run_order_engine(self) -> None:
         confirmed = messagebox.askyesno(
             "발주 기능 실행",
@@ -258,4 +254,3 @@ class MainWindow:
 
     def run(self) -> None:
         self.root.mainloop()
-        
