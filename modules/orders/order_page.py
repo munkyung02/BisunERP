@@ -1,8 +1,9 @@
+from pathlib import Path
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 
+from modules.orders.order_import_service import OrderImportService
 from modules.orders.order_repository import OrderRepository
-
 
 class OrderPage(tk.Toplevel):
     """비선상회 ERP 주문관리 화면입니다."""
@@ -11,6 +12,11 @@ class OrderPage(tk.Toplevel):
         super().__init__(parent)
 
         self.repository = OrderRepository()
+        self.import_service = OrderImportService(
+            repository=self.repository
+        )
+
+        
         self.search_var = tk.StringVar()
         self.status_var = tk.StringVar(value="주문 데이터를 불러오는 중입니다.")
 
@@ -127,7 +133,7 @@ class OrderPage(tk.Toplevel):
         import_button = ttk.Button(
             toolbar,
             text="쿠팡 주문 가져오기",
-            command=self.show_import_preparing,
+            command=self.import_coupang_orders,
             style="OrderAction.TButton",
         )
         import_button.pack(side="right", padx=(0, 8))
@@ -355,18 +361,100 @@ class OrderPage(tk.Toplevel):
     def _search_with_enter(
         self,
         event: tk.Event,
-    ) -> None:
+) -> None:
         self.load_orders()
 
-    def show_import_preparing(self) -> None:
-        messagebox.showinfo(
+
+def import_coupang_orders(self) -> None:
+    """쿠팡 원본 주문 엑셀을 선택하여 DB에 저장합니다."""
+
+    project_root = Path(__file__).resolve().parents[2]
+    initial_folder = project_root / "data"
+
+    file_path = filedialog.askopenfilename(
+        parent=self,
+        title="쿠팡 주문 엑셀 선택",
+        initialdir=initial_folder,
+        filetypes=[
+            (
+                "Excel 파일",
+                "*.xlsx *.xls",
+            ),
+            (
+                "모든 파일",
+                "*.*",
+            ),
+        ],
+    )
+
+    if not file_path:
+        self.status_var.set("주문 가져오기가 취소되었습니다.")
+        return
+
+        confirmed = messagebox.askyesno(
             "쿠팡 주문 가져오기",
-            "화면 연결은 완료되었습니다.\n\n"
-            "다음 Sprint에서 쿠팡 엑셀 주문을 "
-            "SQLite에 저장하는 기능을 연결합니다.",
+            "선택한 쿠팡 주문 파일을 ERP에 저장합니다.\n\n"
+            f"파일: {Path(file_path).name}\n\n"
+            "계속하시겠습니까?",
             parent=self,
         )
 
+        if not confirmed:
+            self.status_var.set("주문 가져오기가 취소되었습니다.")
+            return
+
+        self.status_var.set("쿠팡 주문을 읽고 저장하고 있습니다.")
+        self.update_idletasks()
+
+        try:
+            result = self.import_service.import_coupang_file(
+                file_path
+            )
+
+            self.load_orders()
+
+            result_message = (
+                "쿠팡 주문 가져오기가 완료되었습니다.\n\n"
+                f"원본 상품 행: {result['total_rows']}개\n"
+                f"전체 주문: {result['total_orders']}건\n"
+                f"신규 주문: {result['saved_orders']}건\n"
+                f"신규 상품: {result['saved_items']}개\n"
+                f"중복 주문: {result['duplicate_orders']}건\n"
+                f"실패 주문: {result['failed_orders']}건"
+            )
+
+            if result["failed_orders"] > 0:
+                messagebox.showwarning(
+                    "일부 주문 처리 실패",
+                    result_message,
+                    parent=self,
+                )
+            else:
+                messagebox.showinfo(
+                    "주문 가져오기 완료",
+                    result_message,
+                    parent=self,
+                )
+
+            self.status_var.set(
+                "쿠팡 주문 가져오기 완료: "
+                f"신규 {result['saved_orders']}건, "
+                f"중복 {result['duplicate_orders']}건"
+            )
+
+        except Exception as error:
+            self.status_var.set(
+                "쿠팡 주문 가져오기 중 오류가 발생했습니다."
+            )
+
+            messagebox.showerror(
+                "주문 가져오기 오류",
+                "쿠팡 주문 파일을 처리하지 못했습니다.\n\n"
+                "쿠팡에서 내려받은 원본 DeliveryList 엑셀인지 "
+                "확인해주세요.\n\n"
+                f"오류 내용: {error}",
+                parent=self,
+            )
+
     def _close_window(self) -> None:
         self.destroy()
-        
