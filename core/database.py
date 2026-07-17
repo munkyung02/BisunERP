@@ -19,9 +19,7 @@ class Database:
 
     def connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.database_path)
-
         connection.row_factory = sqlite3.Row
-
         connection.execute("PRAGMA foreign_keys = ON")
 
         return connection
@@ -33,6 +31,7 @@ class Database:
             self._create_customers_table(connection)
             self._create_orders_table(connection)
             self._create_order_items_table(connection)
+            self._create_purchase_orders_table(connection)
             self._create_payments_table(connection)
             self._create_shipments_table(connection)
             self._create_settings_table(connection)
@@ -187,6 +186,50 @@ class Database:
                 FOREIGN KEY (supplier_id)
                     REFERENCES suppliers(id)
                     ON DELETE SET NULL
+            )
+            """
+        )
+
+    def _create_purchase_orders_table(
+        self,
+        connection: sqlite3.Connection,
+    ) -> None:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS purchase_orders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                supplier_id INTEGER,
+                order_id INTEGER NOT NULL,
+                order_item_id INTEGER NOT NULL,
+                supplier_name TEXT,
+                order_number TEXT NOT NULL,
+                product_name TEXT NOT NULL,
+                option_name TEXT,
+                quantity INTEGER NOT NULL DEFAULT 1,
+                receiver_name TEXT,
+                receiver_phone TEXT,
+                postal_code TEXT,
+                address TEXT,
+                delivery_message TEXT,
+                purchase_status TEXT NOT NULL DEFAULT '발주대기',
+                purchase_file TEXT,
+                purchased_at TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+                UNIQUE(order_item_id),
+
+                FOREIGN KEY (supplier_id)
+                    REFERENCES suppliers(id)
+                    ON DELETE SET NULL,
+
+                FOREIGN KEY (order_id)
+                    REFERENCES orders(id)
+                    ON DELETE CASCADE,
+
+                FOREIGN KEY (order_item_id)
+                    REFERENCES order_items(id)
+                    ON DELETE CASCADE
             )
             """
         )
