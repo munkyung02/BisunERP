@@ -3,7 +3,7 @@ from PySide6.QtWidgets import QPushButton
 
 
 class ERPButton(QPushButton):
-    """ERP에서 공통으로 사용하는 버튼입니다."""
+    """비선상회 ERP 공통 버튼입니다."""
 
     BUTTON_STYLES = {
         "primary": """
@@ -109,7 +109,9 @@ class ERPButton(QPushButton):
     ) -> None:
         super().__init__(text, parent)
 
-        self.setCursor(Qt.PointingHandCursor)
+        self.button_type = button_type
+
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setMinimumHeight(36)
 
         self.set_button_type(button_type)
@@ -118,7 +120,7 @@ class ERPButton(QPushButton):
         self,
         button_type: str,
     ) -> None:
-        """버튼의 종류와 스타일을 변경합니다."""
+        """버튼 종류에 맞는 스타일을 적용합니다."""
 
         if button_type not in self.BUTTON_STYLES:
             raise ValueError(
@@ -129,4 +131,3 @@ class ERPButton(QPushButton):
         self.setStyleSheet(
             self.BUTTON_STYLES[button_type]
         )
-        
