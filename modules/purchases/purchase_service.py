@@ -149,23 +149,11 @@ class PurchaseService:
     ) -> dict[str, Any]:
         candidates = self.get_purchase_candidates()
 
+        # 선택 발주일 경우 선택한 주문상품만 남깁니다.
         if order_item_ids is not None:
             selected_ids = {
                 int(item_id)
                 for item_id in order_item_ids
-            }
-
-            candidates = [
-                candidate
-                for candidate in candidates
-                if int(candidate["order_item_id"])
-                in selected_ids
-            ]
-
-        if order_item_ids is not None:
-            selected_ids = {
-                int(order_item_id)
-                for order_item_id in order_item_ids
             }
 
             candidates = [

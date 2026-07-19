@@ -1,4 +1,7 @@
+import re
 import sqlite3
+import unicodedata
+
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
@@ -980,13 +983,158 @@ class OrderRepository:
     # 주문상품 자동 매핑
     # =========================================================
 
+    # =========================================================
+    # 상품명 정규화
+    # =========================================================
+
+    @staticmethod
+    def _normalize_product_text(
+        value: Any,
+    ) -> str:
+        """
+        상품 비교에 사용할 표준 문자열을 만듭니다.
+
+        예:
+        해담_생참치회 500g
+        생참치회500G
+        해담 생참치회 500 g
+
+        모두 비슷한 형태로 정리합니다.
+        """
+
+        if value is None:
+            return ""
+
+        text = unicodedata.normalize(
+            "NFKC",
+            str(value),
+        )
+
+        text = text.lower().strip()
+
+        # 괄호 안의 상세 설명 제거
+        text = re.sub(
+            r"\([^)]*\)",
+            " ",
+            text,
+        )
+        text = re.sub(
+            r"\[[^\]]*\]",
+            " ",
+            text,
+        )
+        text = re.sub(
+            r"\{[^}]*\}",
+            " ",
+            text,
+        )
+
+        # 자주 붙는 공급처 및 브랜드 접두어 제거
+        supplier_prefixes = [
+            "해담",
+            "외현농원",
+            "주영씨푸드",
+            "비선상회",
+        ]
+
+        for prefix in supplier_prefixes:
+            text = re.sub(
+                rf"^{re.escape(prefix)}[\s_\-]*",
+                "",
+                text,
+            )
+
+        # 상품 개수 관련 표현 제거
+        text = re.sub(
+            r"\b\d+\s*(개|팩|봉|박스|세트)\b",
+            " ",
+            text,
+        )
+
+        # 인분 표현 제거
+        text = re.sub(
+            r"\b\d+\s*[~\-]\s*\d+\s*인분\b",
+            " ",
+            text,
+        )
+        text = re.sub(
+            r"\b\d+\s*인분\b",
+            " ",
+            text,
+        )
+
+        # 과수 표현 제거: 7~8과
+        text = re.sub(
+            r"\b\d+\s*[~\-]\s*\d+\s*과\b",
+            " ",
+            text,
+        )
+
+        # 비교에 불필요한 기호 제거
+        text = re.sub(
+            r"[/_,.\-+]",
+            " ",
+            text,
+        )
+
+        # 단위 앞뒤 공백 정리
+        text = re.sub(
+            r"(\d+)\s*(kg|g|ml|l)\b",
+            r"\1\2",
+            text,
+        )
+
+        # 모든 공백 제거
+        text = re.sub(
+            r"\s+",
+            "",
+            text,
+        )
+
+        return text
+
+    @classmethod
+    def _build_product_match_keys(
+        cls,
+        product_name: Any,
+        option_name: Any = None,
+    ) -> set[str]:
+        """
+        하나의 상품에서 비교 가능한 여러 키를 만듭니다.
+        """
+
+        product_text = cls._normalize_product_text(
+            product_name
+        )
+
+        option_text = cls._normalize_product_text(
+            option_name
+        )
+
+        keys: set[str] = set()
+
+        if product_text:
+            keys.add(product_text)
+
+        if product_text and option_text:
+            keys.add(
+                product_text + option_text
+            )
+
+        return keys
+
     def auto_map_order_items(
         self,
         order_id: int | None = None,
     ) -> dict[str, int]:
         """
-        판매처 상품명과 옵션명이 products 정보와 정확히 일치하는
-        주문상품을 자동 매핑합니다.
+        판매처 상품명과 ERP 상품명을 정규화하여 자동 매핑합니다.
+
+        매칭 대상:
+        - 판매처 상품명
+        - 내부 상품명
+        - 공급처 상품명
+        - 옵션명을 포함한 조합
         """
 
         parameters: list[Any] = []
@@ -1030,6 +1178,26 @@ class OrderRepository:
                 parameters,
             ).fetchall()
 
+            product_rows = connection.execute(
+                """
+                SELECT
+                    p.id,
+                    p.platform,
+                    p.platform_product_name,
+                    p.product_name,
+                    p.option_name,
+                    p.supplier_product_name,
+                    p.supplier_id,
+                    p.purchase_round
+
+                FROM products AS p
+
+                WHERE p.is_active = 1
+
+                ORDER BY p.id ASC
+                """
+            ).fetchall()
+
             mapped_count = 0
             unmatched_count = 0
             ambiguous_count = 0
@@ -1038,53 +1206,78 @@ class OrderRepository:
 
             try:
                 for row in target_rows:
-                    candidates = connection.execute(
-                        """
-                        SELECT
-                            p.id,
-                            p.supplier_id,
-                            p.purchase_round
-
-                        FROM products AS p
-
-                        WHERE p.is_active = 1
-                          AND (
-                                p.platform = ?
-                                OR p.platform IS NULL
-                                OR TRIM(p.platform) = ''
-                          )
-                          AND TRIM(
-                                COALESCE(
-                                    p.platform_product_name,
-                                    ''
-                                )
-                              ) = TRIM(?)
-                          AND TRIM(
-                                COALESCE(
-                                    p.option_name,
-                                    ''
-                                )
-                              ) = TRIM(
-                                COALESCE(?, '')
-                              )
-
-                        ORDER BY
-                            CASE
-                                WHEN p.platform = ?
-                                THEN 0
-                                ELSE 1
-                            END,
-                            p.id ASC
-                        """,
-                        (
-                            row["platform"],
+                    order_keys = (
+                        self._build_product_match_keys(
                             row[
                                 "platform_product_name"
                             ],
                             row["option_name"],
-                            row["platform"],
-                        ),
-                    ).fetchall()
+                        )
+                    )
+
+                    candidates = []
+
+                    for product in product_rows:
+                        product_platform = (
+                            str(
+                                product["platform"]
+                                or ""
+                            ).strip()
+                        )
+
+                        order_platform = str(
+                            row["platform"]
+                            or ""
+                        ).strip()
+
+                        # 상품에 플랫폼이 지정돼 있다면
+                        # 주문 플랫폼과 같아야 함
+                        if (
+                            product_platform
+                            and product_platform
+                            != order_platform
+                        ):
+                            continue
+
+                        product_keys: set[str] = set()
+
+                        product_keys.update(
+                            self._build_product_match_keys(
+                                product[
+                                    "platform_product_name"
+                                ],
+                                product[
+                                    "option_name"
+                                ],
+                            )
+                        )
+
+                        product_keys.update(
+                            self._build_product_match_keys(
+                                product[
+                                    "product_name"
+                                ],
+                                product[
+                                    "option_name"
+                                ],
+                            )
+                        )
+
+                        product_keys.update(
+                            self._build_product_match_keys(
+                                product[
+                                    "supplier_product_name"
+                                ],
+                                product[
+                                    "option_name"
+                                ],
+                            )
+                        )
+
+                        if order_keys & product_keys:
+                            candidates.append(
+                                product
+                            )
 
                     if len(candidates) == 1:
                         product = candidates[0]
@@ -1111,15 +1304,16 @@ class OrderRepository:
                         )
 
                         mapped_count += 1
+
                         affected_order_ids.add(
                             int(row["order_id"])
                         )
 
-                    elif len(candidates) == 0:
-                        unmatched_count += 1
+                    elif len(candidates) > 1:
+                        ambiguous_count += 1
 
                     else:
-                        ambiguous_count += 1
+                        unmatched_count += 1
 
                 for affected_order_id in (
                     affected_order_ids
@@ -1136,10 +1330,16 @@ class OrderRepository:
                 raise
 
         return {
-            "target_count": len(target_rows),
+            "target_count": len(
+                target_rows
+            ),
             "mapped_count": mapped_count,
-            "unmatched_count": unmatched_count,
-            "ambiguous_count": ambiguous_count,
+            "unmatched_count": (
+                unmatched_count
+            ),
+            "ambiguous_count": (
+                ambiguous_count
+            ),
         }
 
     # =========================================================

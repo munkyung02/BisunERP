@@ -34,6 +34,7 @@ class Database:
             self._create_purchase_orders_table(connection)
             self._create_payments_table(connection)
             self._create_shipments_table(connection)
+            self._migrate_shipments_table(connection)
             self._create_settings_table(connection)
 
             connection.commit()
@@ -266,29 +267,75 @@ class Database:
         )
 
     def _create_shipments_table(
+            self,
+            connection: sqlite3.Connection,
+        ) -> None:
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS shipments (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    order_id INTEGER NOT NULL,
+                    order_item_id INTEGER,
+                    supplier_id INTEGER,
+                    courier_name TEXT,
+                    tracking_number TEXT,
+                    shipment_status TEXT NOT NULL DEFAULT '배송준비',
+                    shipped_at TEXT,
+                    delivered_at TEXT,
+                    memo TEXT,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+                    FOREIGN KEY (order_id)
+                        REFERENCES orders(id)
+                        ON DELETE CASCADE,
+
+                    FOREIGN KEY (order_item_id)
+                        REFERENCES order_items(id)
+                        ON DELETE CASCADE,
+
+                    FOREIGN KEY (supplier_id)
+                        REFERENCES suppliers(id)
+                        ON DELETE SET NULL
+                )
+                """
+        )
+            
+    def _migrate_shipments_table(
         self,
         connection: sqlite3.Connection,
     ) -> None:
-        connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS shipments (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                order_id INTEGER NOT NULL,
-                courier_name TEXT,
-                tracking_number TEXT,
-                shipment_status TEXT NOT NULL DEFAULT '배송준비',
-                shipped_at TEXT,
-                delivered_at TEXT,
-                memo TEXT,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        """
+        기존 shipments 테이블에 필요한 컬럼을 안전하게 추가합니다.
+        이미 컬럼이 존재하면 아무 작업도 하지 않습니다.
+        """
 
-                FOREIGN KEY (order_id)
-                    REFERENCES orders(id)
-                    ON DELETE CASCADE
-            )
+        rows = connection.execute(
             """
-        )
+            PRAGMA table_info(shipments)
+            """
+        ).fetchall()
+
+        existing_columns = {
+            row["name"]
+            for row in rows
+        }
+
+        if "order_item_id" not in existing_columns:
+            connection.execute(
+                """
+                ALTER TABLE shipments
+                ADD COLUMN order_item_id INTEGER
+                """
+            )
+
+        if "supplier_id" not in existing_columns:
+            connection.execute(
+                """
+                ALTER TABLE shipments
+                ADD COLUMN supplier_id INTEGER
+                """
+            )            
 
     def _create_settings_table(
         self,
