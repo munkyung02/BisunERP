@@ -6,6 +6,7 @@ from typing import Any
 
 from modules.orders.order_repository import OrderRepository
 from modules.purchases.purchase_service import PurchaseService
+from modules.shipments.shipment_service import ShipmentService
 
 
 @dataclass(frozen=True)
@@ -39,6 +40,26 @@ class WorkflowPreview:
         return result
 
 
+@dataclass(frozen=True)
+class ShipmentWorkflowPreview:
+    """Summary of a shipment file before registration."""
+
+    source_type: str
+    total_count: int
+    valid_count: int
+    error_count: int
+    rows: tuple[dict[str, Any], ...]
+
+    @property
+    def can_register(self) -> bool:
+        return self.valid_count > 0
+
+    def to_dict(self) -> dict[str, Any]:
+        result = asdict(self)
+        result["can_register"] = self.can_register
+        return result
+
+
 class OrderWorkflowService:
     """
     기존 주문·상품매핑·발주 모듈을 연결하는 업무 흐름 서비스입니다.
@@ -63,6 +84,7 @@ class OrderWorkflowService:
         output_root: str | Path | None = None,
         order_repository: OrderRepository | None = None,
         purchase_service: PurchaseService | None = None,
+        shipment_service: ShipmentService | None = None,
     ) -> None:
         self.order_repository = (
             order_repository
@@ -75,6 +97,7 @@ class OrderWorkflowService:
                 output_root=output_root,
             )
         )
+        self.shipment_service = shipment_service or ShipmentService()
 
     def preview(
         self,
@@ -218,4 +241,67 @@ class OrderWorkflowService:
             ),
             "preview": preview_dict,
             "purchase": purchase_result,
+        }
+
+    def preview_shipments(
+        self,
+        file_path: str | Path,
+    ) -> ShipmentWorkflowPreview:
+        """Parse and match a shipment file without registering shipments."""
+
+        result = self.shipment_service.preview_simple_shipment_file(
+            file_path
+        )
+        rows = tuple(dict(row) for row in result.get("rows", []))
+
+        return ShipmentWorkflowPreview(
+            source_type=str(result.get("source_type") or ""),
+            total_count=int(result.get("total_count", len(rows)) or 0),
+            valid_count=int(result.get("valid_count", 0) or 0),
+            error_count=int(result.get("error_count", 0) or 0),
+            rows=rows,
+        )
+
+    def register_shipments(
+        self,
+        file_path: str | Path,
+        *,
+        allow_partial: bool = False,
+    ) -> dict[str, Any]:
+        """Preview and register valid rows from a shipment file."""
+
+        preview = self.preview_shipments(file_path)
+        preview_dict = preview.to_dict()
+
+        if not preview.can_register:
+            return {
+                "executed": False,
+                "shipment_registered": False,
+                "reason": "No valid shipment rows were found.",
+                "preview": preview_dict,
+            }
+
+        if preview.error_count > 0 and not allow_partial:
+            return {
+                "executed": False,
+                "shipment_registered": False,
+                "reason": (
+                    "Shipment registration was blocked because the file "
+                    "contains invalid or ambiguous rows."
+                ),
+                "preview": preview_dict,
+            }
+
+        shipment_result = self.shipment_service.save_simple_shipments(
+            list(preview.rows)
+        )
+        registered_count = int(
+            shipment_result.get("shipment_count", 0) or 0
+        )
+
+        return {
+            "executed": True,
+            "shipment_registered": registered_count > 0,
+            "preview": preview_dict,
+            "shipment": shipment_result,
         }
