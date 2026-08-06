@@ -59,7 +59,7 @@ class PurchaseService:
         """
         다음 조건을 만족하는 주문상품만 조회합니다.
 
-        1. 상품 매핑 완료
+        1. 주문 전체의 상품 매핑 완료
         2. 공급처 연결 완료
         3. 아직 purchase_orders에 생성되지 않음
         4. 주문 발주 상태가 발주대기 또는 발주준비
@@ -117,6 +117,7 @@ class PurchaseService:
             WHERE oi.product_id IS NOT NULL
               AND oi.supplier_id IS NOT NULL
               AND oi.mapping_status != '미매핑'
+              AND o.mapping_status = '매핑완료'
               AND o.purchase_status IN (
                     '발주대기',
                     '발주준비'
@@ -142,6 +143,7 @@ class PurchaseService:
 
         for row in rows:
             item = dict(row)
+            item["purchase_status"] = "발주대기"
             item["purchase_quantity"] = (
                 self._purchase_quantity(
                     item.get("quantity"),
