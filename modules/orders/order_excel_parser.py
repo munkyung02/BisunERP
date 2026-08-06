@@ -6,9 +6,9 @@ from typing import Any, Iterable
 
 import pandas as pd
 
+from modules.oms_adapters.defaults import create_default_adapter_registry
+from modules.oms_adapters.legacy_excel_adapter import LegacyExcelOrderAdapter
 from modules.orders.base_order_parser import BaseOrderExcelParser
-from modules.orders.coupang_order_parser import CoupangOrderExcelParser
-from modules.orders.smartstore_order_parser import SmartStoreOrderExcelParser
 
 
 DEFAULT_EXCEL_PASSWORD = "1111"
@@ -19,9 +19,11 @@ class OrderExcelParser:
 
     def __init__(self, excel_password: str = DEFAULT_EXCEL_PASSWORD) -> None:
         self.excel_password = excel_password
+        self.adapter_registry = create_default_adapter_registry()
         self.parsers: list[BaseOrderExcelParser] = [
-            CoupangOrderExcelParser(),
-            SmartStoreOrderExcelParser(),
+            adapter.parser
+            for adapter in self.adapter_registry.adapters
+            if isinstance(adapter, LegacyExcelOrderAdapter)
         ]
 
     def read_excel(self, file_path: str | Path) -> pd.DataFrame:
@@ -114,10 +116,24 @@ class OrderExcelParser:
     def register_parser(self, parser: BaseOrderExcelParser) -> None:
         if not isinstance(parser, BaseOrderExcelParser):
             raise TypeError("BaseOrderExcelParser를 상속한 파서만 등록할 수 있습니다.")
+        self.adapter_registry.register(
+            LegacyExcelOrderAdapter(
+                parser,
+                adapter_id=f"legacy.{parser.platform_name}.{len(self.parsers) + 1}",
+                display_name=f"{parser.platform_name} 주문 Excel",
+                version="1.0",
+                priority=(len(self.parsers) + 1) * 100,
+            )
+        )
         self.parsers.append(parser)
 
     def _find_parser(self, dataframe: pd.DataFrame) -> BaseOrderExcelParser:
-        matched = [parser for parser in self.parsers if parser.can_parse(dataframe)]
+        matched_adapters = self.adapter_registry.matching_adapters(dataframe)
+        matched = [
+            adapter.parser
+            for adapter in matched_adapters
+            if isinstance(adapter, LegacyExcelOrderAdapter)
+        ]
         if not matched:
             raise ValueError(
                 "지원하는 판매채널 주문서 형식을 확인할 수 없습니다.\n\n"
