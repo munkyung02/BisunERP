@@ -5,6 +5,7 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
+from core.version import ERP_VERSION
 from modules.settings.settings_service import SettingsService
 from modules.coupang.coupang_sync_page import CoupangSyncPage
 
@@ -38,7 +39,7 @@ class SettingsPage(ttk.Frame):
         self.backup_directory_var = tk.StringVar()
         self.theme_var = tk.StringVar(value="기본")
         self.auto_save_var = tk.BooleanVar(value=True)
-        self.version_var = tk.StringVar(value="1.0.0")
+        self.version_var = tk.StringVar(value=ERP_VERSION)
         self.status_var = tk.StringVar(
             value="환경설정을 불러오는 중입니다."
         )
@@ -434,6 +435,7 @@ class SettingsPage(ttk.Frame):
             tab,
             textvariable=self.version_var,
             width=18,
+            state="readonly",
         ).grid(
             row=2,
             column=1,
@@ -527,7 +529,7 @@ class SettingsPage(ttk.Frame):
                 )
             )
             self.version_var.set(
-                application.get("version") or "1.0.0"
+                ERP_VERSION
             )
 
             self.footer_text.delete("1.0", "end")
@@ -597,7 +599,7 @@ class SettingsPage(ttk.Frame):
                 "auto_save": (
                     self.auto_save_var.get()
                 ),
-                "version": self.version_var.get(),
+                "version": ERP_VERSION,
             },
         }
 

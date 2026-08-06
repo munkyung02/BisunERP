@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from core.database import Database
+from core.version import ERP_VERSION
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -53,7 +54,7 @@ class SettingsService:
         "application": {
             "theme": "기본",
             "auto_save": True,
-            "version": "2.6.0",
+            "version": ERP_VERSION,
         },
     }
 
@@ -413,9 +414,9 @@ class SettingsService:
         application["auto_save"] = bool(
             application.get("auto_save", True)
         )
-        application["version"] = str(
-            application.get("version") or "2.6.0"
-        ).strip()
+        # application.version is retained as compatibility data only.
+        # Runtime version always comes from core.version.
+        application["version"] = ERP_VERSION
 
         return merged
 
@@ -578,7 +579,7 @@ class SettingsService:
                 else "0"
             ),
             "application.version": str(
-                application.get("version") or "2.6.0"
+                ERP_VERSION
             ),
         }
 
@@ -635,10 +636,6 @@ class SettingsService:
             "application.theme": (
                 "application",
                 "theme",
-            ),
-            "application.version": (
-                "application",
-                "version",
             ),
         }
 

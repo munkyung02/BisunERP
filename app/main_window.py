@@ -6,6 +6,7 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox, ttk
 
+from core.version import ERP_NAME, get_display_version
 from modules.backup_manager.backup_page import BackupPage
 from modules.backup_manager.backup_service import BackupService
 from modules.dashboard.dashboard_page import DashboardPage
@@ -42,7 +43,7 @@ class MainWindow:
 
     def __init__(self) -> None:
         self.root = tk.Tk()
-        self.root.title("BisunERP v2.7")
+        self.root.title(f"{ERP_NAME} {get_display_version()}")
         self.root.geometry("1500x900")
         self.root.minsize(1180, 720)
 
@@ -103,13 +104,13 @@ class MainWindow:
 
         tk.Label(
             header,
-            text="BisunERP",
+            text=ERP_NAME,
             font=("맑은 고딕", 25, "bold"),
         ).pack(side="left")
 
         tk.Label(
             header,
-            text="v2.7",
+            text=get_display_version(),
             font=("맑은 고딕", 11),
         ).pack(
             side="left",

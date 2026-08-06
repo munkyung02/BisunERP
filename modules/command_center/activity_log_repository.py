@@ -5,6 +5,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from core.version import get_version_metadata
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 DATABASE_PATH = PROJECT_ROOT / "data" / "bisun_erp.db"
@@ -52,8 +53,10 @@ class ActivityLogRepository:
         result_message: str = "",
         details: dict[str, Any] | None = None,
     ) -> int:
+        versioned_details = dict(details or {})
+        versioned_details.update(get_version_metadata())
         details_json = json.dumps(
-            details or {},
+            versioned_details,
             ensure_ascii=False,
             default=str,
         )

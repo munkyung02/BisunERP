@@ -2,8 +2,8 @@
 # 비선상회 ERP 설정파일
 # ==========================
 
-# ERP 버전
-ERP_VERSION = "1.2"
+# ERP 버전 (기존 import 호환)
+from core.version import ERP_VERSION
 
 # 회사명
 COMPANY = "비선상회"

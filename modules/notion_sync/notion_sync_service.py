@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from core.version import ERP_NAME, ERP_VERSION
 from modules.settings.settings_service import SettingsService
 
 
@@ -244,7 +245,7 @@ class NotionSyncService:
                 "Authorization": f"Bearer {access_token}",
                 "Notion-Version": NOTION_VERSION,
                 "Content-Type": "application/json",
-                "User-Agent": "BisunERP/1.1",
+                "User-Agent": f"{ERP_NAME}/{ERP_VERSION}",
             },
         )
 

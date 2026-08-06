@@ -6,6 +6,8 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any, Iterable
 
+from core.version import ERP_NAME, ERP_VERSION
+
 
 NOTION_API_BASE = "https://api.notion.com/v1"
 NOTION_API_VERSION = "2026-03-11"
@@ -47,7 +49,7 @@ class NotionAPIClient:
                 "Authorization": f"Bearer {self.token}",
                 "Notion-Version": NOTION_API_VERSION,
                 "Content-Type": "application/json",
-                "User-Agent": "BisunERP/2.4",
+                "User-Agent": f"{ERP_NAME}/{ERP_VERSION}",
             },
         )
         try:

@@ -8,6 +8,7 @@ import urllib.request
 from datetime import date
 from typing import Any
 
+from core.version import ERP_NAME, ERP_VERSION
 from .coupang_auth import CoupangHMACAuth
 
 
@@ -95,7 +96,7 @@ class CoupangAPIClient:
         request.add_header("X-MARKET", "KR")
         request.add_header(
             "User-Agent",
-            "BisunERP/2.8 CoupangOpenAPI",
+            f"{ERP_NAME}/{ERP_VERSION} CoupangOpenAPI",
         )
 
         try:
