@@ -97,7 +97,12 @@ class OrderWorkflowService:
                 output_root=output_root,
             )
         )
-        self.shipment_service = shipment_service or ShipmentService()
+        self.shipment_service = shipment_service
+
+    def _get_shipment_service(self) -> ShipmentService:
+        if self.shipment_service is None:
+            self.shipment_service = ShipmentService()
+        return self.shipment_service
 
     def preview(
         self,
@@ -249,7 +254,7 @@ class OrderWorkflowService:
     ) -> ShipmentWorkflowPreview:
         """Parse and match a shipment file without registering shipments."""
 
-        result = self.shipment_service.preview_simple_shipment_file(
+        result = self._get_shipment_service().preview_simple_shipment_file(
             file_path
         )
         rows = tuple(dict(row) for row in result.get("rows", []))
@@ -292,7 +297,7 @@ class OrderWorkflowService:
                 "preview": preview_dict,
             }
 
-        shipment_result = self.shipment_service.save_simple_shipments(
+        shipment_result = self._get_shipment_service().save_simple_shipments(
             list(preview.rows)
         )
         registered_count = int(
