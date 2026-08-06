@@ -15,6 +15,7 @@ from modules.coupang.coupang_sync_page import CoupangSyncPage
 from modules.coupang.coupang_scheduler import CoupangOrderScheduler
 from modules.command_center.command_center_page import CommandCenterPage
 from modules.erp_assistant.assistant_page import ERPAssistantPage
+from modules.qa_automation.qa_page import QAAutomationPage
 from modules.data_import.data_import_page import DataImportPage
 from modules.integrity.integrity_page import IntegrityPage
 from modules.mappings.mapping_page import MappingPage
@@ -58,6 +59,7 @@ class MainWindow:
         self.dashboard_page: DashboardPage | None = None
         self.command_center_page: CommandCenterPage | None = None
         self.erp_assistant_page: ERPAssistantPage | None = None
+        self.qa_automation_page: QAAutomationPage | None = None
         self.purchase_dashboard_page: PurchaseDashboardPage | None = None
         self.data_import_page: DataImportPage | None = None
         self.operations_check_page: OperationsCheckPage | None = None
@@ -229,6 +231,7 @@ class MainWindow:
         ]
 
         support_menus = [
+            ("시스템 진단", self.show_qa_automation),
             ("일괄등록", self.show_data_import),
             ("구매통계", self.show_purchase_dashboard),
             ("실무점검", self.show_operations_check),
@@ -322,6 +325,16 @@ class MainWindow:
             status_callback=self.status_var.set,
         )
         self.erp_assistant_page.grid(
+            row=0,
+            column=0,
+            sticky="nsew",
+        )
+
+        self.qa_automation_page = QAAutomationPage(
+            self.content_frame,
+            status_callback=self.status_var.set,
+        )
+        self.qa_automation_page.grid(
             row=0,
             column=0,
             sticky="nsew",
@@ -447,6 +460,14 @@ class MainWindow:
         self.erp_assistant_page.focus_question()
         self.status_var.set("ERP 도우미 화면")
 
+    def show_qa_automation(self) -> None:
+        if self.qa_automation_page is None:
+            return
+
+        self.qa_automation_page.tkraise()
+        self.qa_automation_page.refresh_data()
+        self.status_var.set("QA Automation Center 화면")
+
     def show_work_center(self) -> None:
         if self.work_center_page is None:
             return
@@ -522,6 +543,7 @@ class MainWindow:
         actions = {
             "Command Center": self.show_command_center,
             "ERP 도우미": self.show_erp_assistant,
+            "시스템 진단": self.show_qa_automation,
             "작업센터": self.show_work_center,
             "주문관리": self.open_orders,
             "상품관리": self.open_products,

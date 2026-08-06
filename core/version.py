@@ -2,7 +2,7 @@ from __future__ import annotations
 
 
 ERP_NAME = "BisunERP"
-ERP_VERSION = "4.0.0"
+ERP_VERSION = "4.1.0"
 
 
 def get_erp_version() -> str:
