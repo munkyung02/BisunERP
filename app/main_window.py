@@ -13,6 +13,7 @@ from modules.dashboard.dashboard_service import DashboardService
 from modules.coupang.coupang_sync_page import CoupangSyncPage
 from modules.coupang.coupang_scheduler import CoupangOrderScheduler
 from modules.command_center.command_center_page import CommandCenterPage
+from modules.erp_assistant.assistant_page import ERPAssistantPage
 from modules.data_import.data_import_page import DataImportPage
 from modules.integrity.integrity_page import IntegrityPage
 from modules.mappings.mapping_page import MappingPage
@@ -55,6 +56,7 @@ class MainWindow:
 
         self.dashboard_page: DashboardPage | None = None
         self.command_center_page: CommandCenterPage | None = None
+        self.erp_assistant_page: ERPAssistantPage | None = None
         self.purchase_dashboard_page: PurchaseDashboardPage | None = None
         self.data_import_page: DataImportPage | None = None
         self.operations_check_page: OperationsCheckPage | None = None
@@ -215,6 +217,7 @@ class MainWindow:
         core_menus = [
             ("Dashboard", self.show_dashboard),
             ("Command Center", self.show_command_center),
+            ("ERP 도우미", self.show_erp_assistant),
             ("작업센터", self.show_work_center),
             ("주문관리", self.open_orders),
             ("상품관리", self.open_products),
@@ -308,6 +311,16 @@ class MainWindow:
             shipment_action=self.open_shipments,
         )
         self.command_center_page.grid(
+            row=0,
+            column=0,
+            sticky="nsew",
+        )
+
+        self.erp_assistant_page = ERPAssistantPage(
+            self.content_frame,
+            status_callback=self.status_var.set,
+        )
+        self.erp_assistant_page.grid(
             row=0,
             column=0,
             sticky="nsew",
@@ -425,6 +438,14 @@ class MainWindow:
         self.command_center_page.refresh_data()
         self.status_var.set("ERP Command Center 화면")
 
+    def show_erp_assistant(self) -> None:
+        if self.erp_assistant_page is None:
+            return
+
+        self.erp_assistant_page.tkraise()
+        self.erp_assistant_page.focus_question()
+        self.status_var.set("ERP 도우미 화면")
+
     def show_work_center(self) -> None:
         if self.work_center_page is None:
             return
@@ -499,6 +520,7 @@ class MainWindow:
     def navigate_to_menu(self, target: str) -> None:
         actions = {
             "Command Center": self.show_command_center,
+            "ERP 도우미": self.show_erp_assistant,
             "작업센터": self.show_work_center,
             "주문관리": self.open_orders,
             "상품관리": self.open_products,
