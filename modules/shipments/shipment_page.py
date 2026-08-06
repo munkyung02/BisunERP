@@ -16,6 +16,9 @@ from modules.shipments.shipment_service import (
 from modules.shipments.export_service import (
     ExportService,
 )
+from modules.shipments.channel_shipment_export_service import (
+    ChannelShipmentExportService,
+)
 from modules.shipments.simple_import_dialog import SimpleShipmentImportDialog
 from modules.shipments.shipment_format_dialog import ShipmentFormatDialog
 
@@ -32,6 +35,7 @@ class ShipmentPage(ttk.Frame):
         self.service = ShipmentService()
         self.repository = ShipmentRepository()
         self.export_service = ExportService()
+        self.channel_export_service = ChannelShipmentExportService()
 
         self.selected_file_path: Path | None = None
         self.preview_result: dict[str, Any] | None = None
@@ -258,6 +262,26 @@ class ShipmentPage(ttk.Frame):
         ).grid(
             row=0,
             column=6,
+            padx=(8, 0),
+        )
+
+        ttk.Button(
+            frame,
+            text="채널별 송장파일 생성",
+            command=self.export_channel_shipments,
+        ).grid(
+            row=0,
+            column=7,
+            padx=(8, 0),
+        )
+
+        ttk.Button(
+            frame,
+            text="선택 송장 재출력",
+            command=self.reexport_selected_channel_shipments,
+        ).grid(
+            row=0,
+            column=8,
             padx=(8, 0),
         )
 
@@ -884,6 +908,85 @@ class ShipmentPage(ttk.Frame):
         """
         )
 
+    def export_channel_shipments(self) -> None:
+        """아직 내보내지 않은 쿠팡 배송중 송장을 생성합니다."""
+        try:
+            result = self.channel_export_service.export_coupang()
+        except Exception as error:
+            messagebox.showerror(
+                "채널별 송장파일 생성 오류",
+                str(error),
+                parent=self,
+            )
+            return
+
+        if not result.get("created"):
+            messagebox.showinfo(
+                "채널별 송장파일 생성",
+                str(result.get("message") or "생성 대상이 없습니다."),
+                parent=self,
+            )
+            return
+
+        messagebox.showinfo(
+            "채널별 송장파일 생성 완료",
+            (
+                f"쿠팡: {result.get('exported_count', 0):,}건\n"
+                "스마트스토어: 템플릿 필요\n\n"
+                f"저장 위치\n{result.get('output_file_path', '')}"
+            ),
+            parent=self,
+        )
+
+    def reexport_selected_channel_shipments(self) -> None:
+        """저장된 송장 목록에서 선택한 쿠팡 송장을 명시적으로 재출력합니다."""
+        selection = self.saved_tree.selection()
+        if not selection:
+            messagebox.showwarning(
+                "선택 송장 재출력",
+                "저장된 송장 목록에서 재출력할 항목을 선택해 주세요.",
+                parent=self,
+            )
+            return
+
+        shipment_ids = [int(item_id) for item_id in selection]
+        if not messagebox.askyesno(
+            "선택 송장 재출력",
+            f"선택한 {len(shipment_ids):,}건을 다시 출력하시겠습니까?",
+            parent=self,
+        ):
+            return
+
+        try:
+            result = self.channel_export_service.export_coupang(
+                shipment_ids=shipment_ids,
+                reexport=True,
+            )
+        except Exception as error:
+            messagebox.showerror(
+                "선택 송장 재출력 오류",
+                str(error),
+                parent=self,
+            )
+            return
+
+        if not result.get("created"):
+            messagebox.showinfo(
+                "선택 송장 재출력",
+                str(result.get("message") or "재출력 대상이 없습니다."),
+                parent=self,
+            )
+            return
+
+        messagebox.showinfo(
+            "선택 송장 재출력 완료",
+            (
+                f"쿠팡: {result.get('exported_count', 0):,}건\n\n"
+                f"저장 위치\n{result.get('output_file_path', '')}"
+            ),
+            parent=self,
+        )
+
     def copy_selected_tracking_number(
         self,
         event: tk.Event | None = None,
@@ -935,6 +1038,7 @@ class ShipmentPage(ttk.Frame):
             self.saved_tree.insert(
                 "",
                 "end",
+                iid=str(shipment.get("id")),
                 values=(
                     shipment.get(
                         "supplier_name",
