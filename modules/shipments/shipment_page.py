@@ -913,6 +913,7 @@ class ShipmentPage(ttk.Frame):
         try:
             coupang_result = self.channel_export_service.export_coupang()
             smartstore_result = self.channel_export_service.export_smartstore()
+            gmarket_result = self.channel_export_service.export_gmarket()
         except Exception as error:
             messagebox.showerror(
                 "채널별 송장파일 생성 오류",
@@ -921,14 +922,20 @@ class ShipmentPage(ttk.Frame):
             )
             return
 
-        if not coupang_result.get("created") and not smartstore_result.get("created"):
+        if not any(
+            result.get("created")
+            for result in (coupang_result, smartstore_result, gmarket_result)
+        ):
             messagebox.showinfo(
                 "채널별 송장파일 생성",
                 (
                     f"쿠팡: {coupang_result.get('message', '생성 대상 없음')}\n"
                     f"스마트스토어: {smartstore_result.get('message', '생성 대상 없음')}\n"
-                    "메타데이터 없음: "
-                    f"{smartstore_result.get('missing_metadata_count', 0):,}건"
+                    f"Gmarket: {gmarket_result.get('message', '생성 대상 없음')}\n"
+                    "스마트스토어 메타데이터 없음: "
+                    f"{smartstore_result.get('missing_metadata_count', 0):,}건\n"
+                    "Gmarket 메타데이터 없음: "
+                    f"{gmarket_result.get('missing_metadata_count', 0):,}건"
                 ),
                 parent=self,
             )
@@ -936,7 +943,7 @@ class ShipmentPage(ttk.Frame):
 
         output_paths = [
             str(result.get("output_file_path"))
-            for result in (coupang_result, smartstore_result)
+            for result in (coupang_result, smartstore_result, gmarket_result)
             if result.get("created")
         ]
         messagebox.showinfo(
@@ -944,8 +951,13 @@ class ShipmentPage(ttk.Frame):
             (
                 f"쿠팡: {coupang_result.get('exported_count', 0):,}건\n"
                 f"스마트스토어: {smartstore_result.get('exported_count', 0):,}건\n"
+                f"Gmarket: {gmarket_result.get('exported_count', 0):,}건\n"
                 "스마트스토어 메타데이터 없음: "
-                f"{smartstore_result.get('missing_metadata_count', 0):,}건\n\n"
+                f"{smartstore_result.get('missing_metadata_count', 0):,}건\n"
+                "Gmarket 메타데이터 없음: "
+                f"{gmarket_result.get('missing_metadata_count', 0):,}건\n"
+                "Gmarket 원본 데이터 불완전: "
+                f"{gmarket_result.get('incomplete_raw_count', 0):,}건\n\n"
                 "저장 위치\n" + "\n".join(output_paths)
             ),
             parent=self,
@@ -979,6 +991,10 @@ class ShipmentPage(ttk.Frame):
                 shipment_ids=shipment_ids,
                 reexport=True,
             )
+            gmarket_result = self.channel_export_service.export_gmarket(
+                shipment_ids=shipment_ids,
+                reexport=True,
+            )
         except Exception as error:
             messagebox.showerror(
                 "선택 송장 재출력 오류",
@@ -987,14 +1003,20 @@ class ShipmentPage(ttk.Frame):
             )
             return
 
-        if not coupang_result.get("created") and not smartstore_result.get("created"):
+        if not any(
+            result.get("created")
+            for result in (coupang_result, smartstore_result, gmarket_result)
+        ):
             messagebox.showinfo(
                 "선택 송장 재출력",
                 (
                     f"쿠팡: {coupang_result.get('message', '재출력 대상 없음')}\n"
                     f"스마트스토어: {smartstore_result.get('message', '재출력 대상 없음')}\n"
-                    "메타데이터 없음: "
-                    f"{smartstore_result.get('missing_metadata_count', 0):,}건"
+                    f"Gmarket: {gmarket_result.get('message', '재출력 대상 없음')}\n"
+                    "스마트스토어 메타데이터 없음: "
+                    f"{smartstore_result.get('missing_metadata_count', 0):,}건\n"
+                    "Gmarket 메타데이터 없음: "
+                    f"{gmarket_result.get('missing_metadata_count', 0):,}건"
                 ),
                 parent=self,
             )
@@ -1002,7 +1024,7 @@ class ShipmentPage(ttk.Frame):
 
         output_paths = [
             str(result.get("output_file_path"))
-            for result in (coupang_result, smartstore_result)
+            for result in (coupang_result, smartstore_result, gmarket_result)
             if result.get("created")
         ]
         messagebox.showinfo(
@@ -1010,8 +1032,13 @@ class ShipmentPage(ttk.Frame):
             (
                 f"쿠팡: {coupang_result.get('exported_count', 0):,}건\n"
                 f"스마트스토어: {smartstore_result.get('exported_count', 0):,}건\n"
+                f"Gmarket: {gmarket_result.get('exported_count', 0):,}건\n"
                 "스마트스토어 메타데이터 없음: "
-                f"{smartstore_result.get('missing_metadata_count', 0):,}건\n\n"
+                f"{smartstore_result.get('missing_metadata_count', 0):,}건\n"
+                "Gmarket 메타데이터 없음: "
+                f"{gmarket_result.get('missing_metadata_count', 0):,}건\n"
+                "Gmarket 원본 데이터 불완전: "
+                f"{gmarket_result.get('incomplete_raw_count', 0):,}건\n\n"
                 "저장 위치\n" + "\n".join(output_paths)
             ),
             parent=self,
