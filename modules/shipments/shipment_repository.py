@@ -11,6 +11,7 @@ class ShipmentRepository:
     def __init__(self) -> None:
         self.database_path = DATABASE_PATH
         self._ensure_coupang_api_schema()
+        self._ensure_supplier_shipment_format_schema()
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(
@@ -52,6 +53,105 @@ class ShipmentRepository:
                     idx_coupang_shipment_api_status
                 ON coupang_shipment_api_logs(api_status)
                 """
+            )
+            conn.commit()
+
+    def _ensure_supplier_shipment_format_schema(self) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS supplier_shipment_formats (
+                    supplier_id INTEGER PRIMARY KEY,
+                    header_row INTEGER NOT NULL CHECK(header_row > 0),
+                    order_number_column INTEGER NOT NULL
+                        CHECK(order_number_column > 0),
+                    carrier_column INTEGER NOT NULL
+                        CHECK(carrier_column > 0),
+                    tracking_number_column INTEGER NOT NULL
+                        CHECK(tracking_number_column > 0),
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(supplier_id)
+                        REFERENCES suppliers(id) ON DELETE CASCADE
+                )
+                """
+            )
+            conn.commit()
+
+    def get_supplier_shipment_format(
+        self,
+        supplier_id: int,
+    ) -> dict | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT
+                    supplier_id,
+                    header_row,
+                    order_number_column,
+                    carrier_column,
+                    tracking_number_column,
+                    created_at,
+                    updated_at
+                FROM supplier_shipment_formats
+                WHERE supplier_id = ?
+                """,
+                (int(supplier_id),),
+            ).fetchone()
+        return dict(row) if row is not None else None
+
+    def save_supplier_shipment_format(
+        self,
+        *,
+        supplier_id: int,
+        header_row: int,
+        order_number_column: int,
+        carrier_column: int,
+        tracking_number_column: int,
+    ) -> None:
+        coordinates = (
+            int(header_row),
+            int(order_number_column),
+            int(carrier_column),
+            int(tracking_number_column),
+        )
+        if any(value < 1 for value in coordinates):
+            raise ValueError("헤더 행과 열 번호는 1 이상이어야 합니다.")
+        if len(set(coordinates[1:])) != 3:
+            raise ValueError("주문번호, 택배사, 송장번호 열은 서로 달라야 합니다.")
+
+        with self._connect() as conn:
+            supplier = conn.execute(
+                "SELECT id FROM suppliers WHERE id = ?",
+                (int(supplier_id),),
+            ).fetchone()
+            if supplier is None:
+                raise ValueError("존재하지 않는 공급처입니다.")
+
+            conn.execute(
+                """
+                INSERT INTO supplier_shipment_formats (
+                    supplier_id,
+                    header_row,
+                    order_number_column,
+                    carrier_column,
+                    tracking_number_column
+                )
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(supplier_id) DO UPDATE SET
+                    header_row = excluded.header_row,
+                    order_number_column = excluded.order_number_column,
+                    carrier_column = excluded.carrier_column,
+                    tracking_number_column = excluded.tracking_number_column,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (
+                    int(supplier_id),
+                    int(header_row),
+                    int(order_number_column),
+                    int(carrier_column),
+                    int(tracking_number_column),
+                ),
             )
             conn.commit()
 
@@ -300,9 +400,10 @@ class ShipmentRepository:
                 LEFT JOIN purchase_orders AS po
                     ON po.order_item_id = sh.order_item_id
                 WHERE TRIM(sh.tracking_number) = TRIM(?)
+                  AND sh.order_id <> ?
                 LIMIT 1
                 """,
-                (cleaned_tracking,),
+                (cleaned_tracking, int(order_id)),
             ).fetchone()
 
             if duplicate_tracking is not None:
@@ -424,11 +525,7 @@ class ShipmentRepository:
         total_count = int(row["total_count"] or 0)
         registered_count = int(row["registered_count"] or 0)
 
-        status = (
-            "송장등록완료"
-            if total_count > 0 and registered_count >= total_count
-            else "송장대기"
-        )
+        status = "배송중" if registered_count > 0 else "송장대기"
 
         conn.execute(
             """

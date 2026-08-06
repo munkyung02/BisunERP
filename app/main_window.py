@@ -12,6 +12,7 @@ from modules.dashboard.dashboard_page import DashboardPage
 from modules.dashboard.dashboard_service import DashboardService
 from modules.coupang.coupang_sync_page import CoupangSyncPage
 from modules.coupang.coupang_scheduler import CoupangOrderScheduler
+from modules.command_center.command_center_page import CommandCenterPage
 from modules.data_import.data_import_page import DataImportPage
 from modules.integrity.integrity_page import IntegrityPage
 from modules.mappings.mapping_page import MappingPage
@@ -53,6 +54,7 @@ class MainWindow:
         self.backup_service = BackupService()
 
         self.dashboard_page: DashboardPage | None = None
+        self.command_center_page: CommandCenterPage | None = None
         self.purchase_dashboard_page: PurchaseDashboardPage | None = None
         self.data_import_page: DataImportPage | None = None
         self.operations_check_page: OperationsCheckPage | None = None
@@ -212,6 +214,7 @@ class MainWindow:
 
         core_menus = [
             ("Dashboard", self.show_dashboard),
+            ("Command Center", self.show_command_center),
             ("작업센터", self.show_work_center),
             ("주문관리", self.open_orders),
             ("상품관리", self.open_products),
@@ -291,6 +294,20 @@ class MainWindow:
             delivery_action=self.open_shipments,
         )
         self.dashboard_page.grid(
+            row=0,
+            column=0,
+            sticky="nsew",
+        )
+
+        self.command_center_page = CommandCenterPage(
+            self.content_frame,
+            status_callback=self.status_var.set,
+            order_sync_action=self.show_coupang_sync,
+            validation_action=self.show_operations_check,
+            purchase_action=self.open_purchases,
+            shipment_action=self.open_shipments,
+        )
+        self.command_center_page.grid(
             row=0,
             column=0,
             sticky="nsew",
@@ -400,6 +417,14 @@ class MainWindow:
         self.status_var.set("Dashboard 화면")
         self.refresh_menu_badges()
 
+    def show_command_center(self) -> None:
+        if self.command_center_page is None:
+            return
+
+        self.command_center_page.tkraise()
+        self.command_center_page.refresh_data()
+        self.status_var.set("ERP Command Center 화면")
+
     def show_work_center(self) -> None:
         if self.work_center_page is None:
             return
@@ -473,6 +498,7 @@ class MainWindow:
 
     def navigate_to_menu(self, target: str) -> None:
         actions = {
+            "Command Center": self.show_command_center,
             "작업센터": self.show_work_center,
             "주문관리": self.open_orders,
             "상품관리": self.open_products,

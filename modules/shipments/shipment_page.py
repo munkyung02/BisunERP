@@ -17,6 +17,7 @@ from modules.shipments.export_service import (
     ExportService,
 )
 from modules.shipments.simple_import_dialog import SimpleShipmentImportDialog
+from modules.shipments.shipment_format_dialog import ShipmentFormatDialog
 
 
 class ShipmentPage(ttk.Frame):
@@ -35,8 +36,9 @@ class ShipmentPage(ttk.Frame):
         self.selected_file_path: Path | None = None
         self.preview_result: dict[str, Any] | None = None
 
+        self.supplier_names = self.service.get_shipment_supplier_names()
         self.supplier_var = tk.StringVar(
-            value="해담"
+            value=self.supplier_names[0] if self.supplier_names else ""
         )
         self.file_path_var = tk.StringVar()
         self.status_var = tk.StringVar(
@@ -109,6 +111,11 @@ class ShipmentPage(ttk.Frame):
 
         action_frame = ttk.Frame(frame)
         action_frame.grid(row=0, column=1, rowspan=2, sticky="e")
+        ttk.Button(
+            action_frame,
+            text="양식 등록",
+            command=self.open_shipment_format,
+        ).pack(side="left", padx=(0, 8))
         ttk.Button(
             action_frame,
             text="간편 송장 일괄등록",
@@ -192,11 +199,7 @@ class ShipmentPage(ttk.Frame):
         supplier_combo = ttk.Combobox(
             frame,
             textvariable=self.supplier_var,
-            values=list(
-                self.service
-                .SUPPLIER_PROFILES
-                .keys()
-            ),
+            values=self.supplier_names,
             state="readonly",
             width=15,
         )
@@ -596,6 +599,7 @@ class ShipmentPage(ttk.Frame):
             "unmatched": "미매칭",
             "ambiguous": "중복후보",
             "duplicate": "기등록",
+            "error": "파일오류",
         }
 
         for index, match_result in enumerate(
@@ -629,6 +633,12 @@ class ShipmentPage(ttk.Frame):
             elif match_status == "duplicate":
                 message = (
                     "이미 등록된 송장번호"
+                )
+
+            elif match_status == "error":
+                message = shipment.get(
+                    "error_message",
+                    "입력값을 확인하세요.",
                 )
 
             self.preview_tree.insert(
@@ -766,6 +776,8 @@ class ShipmentPage(ttk.Frame):
         messagebox.showinfo(
             "송장 저장 완료",
             (
+                f"전체: "
+                f"{result['total_count']}건\n"
                 f"저장 완료: "
                 f"{result['saved_count']}건\n"
                 f"건너뜀: "
@@ -776,6 +788,13 @@ class ShipmentPage(ttk.Frame):
                 f"{result.get('coupang_success_count', 0)}건\n"
                 f"쿠팡 전송 실패: "
                 f"{result.get('coupang_failed_count', 0)}건"
+                + (
+                    "\n" + "\n".join(
+                        result.get("coupang_skipped_messages", [])
+                    )
+                    if result.get("coupang_skipped_messages")
+                    else ""
+                )
             ),
         )
 
@@ -817,6 +836,9 @@ class ShipmentPage(ttk.Frame):
 
     def open_simple_import(self) -> None:
         SimpleShipmentImportDialog(self, refresh_callback=self.load_saved_shipments)
+
+    def open_shipment_format(self) -> None:
+        ShipmentFormatDialog(self)
 
     def export_coupang_file(self):
 

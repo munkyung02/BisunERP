@@ -4,6 +4,9 @@ from pathlib import Path
 from typing import Any
 
 from modules.orders.order_repository import OrderRepository
+from modules.shipments.configurable_shipment_parser import (
+    ConfigurableShipmentParser,
+)
 from modules.shipments.parsers import (
     detect_shipment_parser,
     get_supplier_parser,
@@ -11,6 +14,7 @@ from modules.shipments.parsers import (
 )
 from modules.shipments.parsers.base_parser import BaseShipmentParser
 from modules.shipments.shipment_repository import ShipmentRepository
+from modules.suppliers.supplier_repository import SupplierRepository
 from modules.coupang.coupang_shipment_service import CoupangShipmentService
 
 
@@ -26,6 +30,9 @@ class ShipmentService:
     def __init__(self) -> None:
         self.shipment_repository = ShipmentRepository()
         self.order_repository = OrderRepository()
+        self.supplier_repository = SupplierRepository(
+            self.shipment_repository.database_path
+        )
         self.coupang_shipment_service = CoupangShipmentService(
             database_path=self.shipment_repository.database_path
         )
@@ -37,6 +44,7 @@ class ShipmentService:
         success_count = 0
         failed_count = 0
         skipped_count = 0
+        skipped_messages: list[str] = []
         errors: list[dict[str, Any]] = []
 
         for shipment_id in shipment_ids:
@@ -46,6 +54,9 @@ class ShipmentService:
                 )
                 if result.get("skipped"):
                     skipped_count += 1
+                    message = str(result.get("message") or "").strip()
+                    if message and message not in skipped_messages:
+                        skipped_messages.append(message)
                 elif result.get("succeed"):
                     success_count += 1
                 else:
@@ -63,6 +74,7 @@ class ShipmentService:
             "coupang_success_count": success_count,
             "coupang_failed_count": failed_count,
             "coupang_skipped_count": skipped_count,
+            "coupang_skipped_messages": skipped_messages,
             "coupang_errors": errors,
         }
 
@@ -106,8 +118,45 @@ class ShipmentService:
         file_path: str | Path,
         supplier_name: str,
     ) -> dict[str, Any]:
-        parser = get_supplier_parser(supplier_name)
+        supplier = next(
+            (
+                row
+                for row in self.supplier_repository.get_suppliers()
+                if str(row["supplier_name"]).strip()
+                == str(supplier_name).strip()
+            ),
+            None,
+        )
+        mapping = None
+        if supplier is not None:
+            mapping = self.shipment_repository.get_supplier_shipment_format(
+                int(supplier["id"])
+            )
+
+        if mapping is not None:
+            parser = ConfigurableShipmentParser(
+                supplier_name=str(supplier["supplier_name"]),
+                header_row=int(mapping["header_row"]),
+                order_number_column=int(mapping["order_number_column"]),
+                carrier_column=int(mapping["carrier_column"]),
+                tracking_number_column=int(
+                    mapping["tracking_number_column"]
+                ),
+            )
+        else:
+            parser = get_supplier_parser(supplier_name)
         return parser.parse(file_path)
+
+    def get_shipment_supplier_names(self) -> list[str]:
+        names = [
+            str(row["supplier_name"]).strip()
+            for row in self.supplier_repository.get_suppliers(active_only=True)
+            if str(row["supplier_name"]).strip()
+        ]
+        for name in get_supported_supplier_names():
+            if name not in names:
+                names.append(name)
+        return names
 
     def preview_supplier_shipment_file(
         self,
@@ -118,6 +167,9 @@ class ShipmentService:
             file_path=file_path,
             supplier_name=supplier_name,
         )
+
+        if file_result.get("match_mode") == "order_number":
+            return self._preview_configured_supplier_rows(file_result)
 
         match_results: list[dict[str, Any]] = []
         matched_count = 0
@@ -163,10 +215,72 @@ class ShipmentService:
             "duplicate_count": duplicate_count,
         }
 
+    def _preview_configured_supplier_rows(
+        self,
+        file_result: dict[str, Any],
+    ) -> dict[str, Any]:
+        simple_result = self._preview_standard_rows(file_result)
+        match_results: list[dict[str, Any]] = []
+        matched_count = 0
+        unmatched_count = 0
+        duplicate_count = 0
+        invalid_count = 0
+
+        for row in simple_result["rows"]:
+            status = row["status"]
+            if status == "valid":
+                match_status = "matched"
+                matched_count += 1
+            elif status == "duplicate":
+                match_status = "duplicate"
+                duplicate_count += 1
+            else:
+                parser_error = any(
+                    int(error.get("excel_row") or -1)
+                    == int(row.get("excel_row") or -2)
+                    for error in file_result.get("errors", [])
+                )
+                if parser_error:
+                    match_status = "error"
+                    invalid_count += 1
+                else:
+                    match_status = "unmatched"
+                    unmatched_count += 1
+
+            shipment = {
+                "excel_row": row.get("excel_row"),
+                "order_number": row.get("order_number", ""),
+                "carrier": row.get("carrier", ""),
+                "tracking_number": row.get("tracking_number", ""),
+                "error_message": row.get("message", ""),
+            }
+            items = row.get("items", [])
+            match_results.append(
+                {
+                    "status": match_status,
+                    "shipment": shipment,
+                    "candidate": items[0] if items else {},
+                    "candidates": items,
+                    "items": items,
+                }
+            )
+
+        return {
+            **file_result,
+            "match_results": match_results,
+            "matched_count": matched_count,
+            "unmatched_count": unmatched_count,
+            "ambiguous_count": 0,
+            "duplicate_count": duplicate_count,
+            "error_count": invalid_count,
+            "errors": [],
+        }
+
     def save_matched_shipments(
         self,
         match_results: list[dict[str, Any]],
     ) -> dict[str, Any]:
+        total_count = len(match_results)
         saved_count = 0
         skipped_count = 0
         error_count = 0
@@ -174,12 +288,27 @@ class ShipmentService:
         created_shipment_ids: list[int] = []
 
         for result in match_results:
+            if result.get("status") == "error":
+                error_count += 1
+                shipment = result.get("shipment", {})
+                errors.append(
+                    {
+                        "excel_row": shipment.get("excel_row"),
+                        "tracking_number": shipment.get(
+                            "tracking_number", ""
+                        ),
+                        "error": shipment.get(
+                            "error_message", "입력값을 확인하세요."
+                        ),
+                    }
+                )
+                continue
             if result.get("status") != "matched":
                 skipped_count += 1
                 continue
 
             shipment = result["shipment"]
-            candidate = result["candidate"]
+            candidates = result.get("items") or [result["candidate"]]
             tracking_number = BaseShipmentParser.clean_tracking_number(
                 shipment.get("tracking_number")
             )
@@ -191,22 +320,23 @@ class ShipmentService:
                     skipped_count += 1
                     continue
 
-                shipment_id = self.shipment_repository.create_shipment(
-                    order_id=int(candidate["order_id"]),
-                    order_item_id=int(candidate["order_item_id"]),
-                    supplier_id=(
-                        int(candidate["supplier_id"])
-                        if candidate.get("supplier_id") is not None
-                        else None
-                    ),
-                    courier_name=shipment["carrier"],
-                    tracking_number=tracking_number,
-                    shipment_status="배송중",
-                    purchase_order_id=int(
-                        candidate["purchase_order_id"]
-                    ),
-                )
-                created_shipment_ids.append(int(shipment_id))
+                for candidate in candidates:
+                    shipment_id = self.shipment_repository.create_shipment(
+                        order_id=int(candidate["order_id"]),
+                        order_item_id=int(candidate["order_item_id"]),
+                        supplier_id=(
+                            int(candidate["supplier_id"])
+                            if candidate.get("supplier_id") is not None
+                            else None
+                        ),
+                        courier_name=shipment["carrier"],
+                        tracking_number=tracking_number,
+                        shipment_status="배송중",
+                        purchase_order_id=int(
+                            candidate["purchase_order_id"]
+                        ),
+                    )
+                    created_shipment_ids.append(int(shipment_id))
                 saved_count += 1
             except Exception as error:
                 error_count += 1
@@ -222,6 +352,7 @@ class ShipmentService:
             created_shipment_ids
         )
         return {
+            "total_count": total_count,
             "saved_count": saved_count,
             "skipped_count": skipped_count,
             "error_count": error_count,
@@ -507,15 +638,26 @@ class ShipmentService:
     def save_simple_shipments(
         self,
         rows: list[dict[str, Any]],
-    ) -> dict[str, int]:
+    ) -> dict[str, Any]:
+        total_count = len(rows)
+        success_count = 0
         shipment_count = 0
         skipped_count = 0
+        error_count = 0
+        errors: list[str] = []
         processed_orders: set[int] = set()
         created_shipment_ids: list[int] = []
 
         for row in rows:
-            if row.get("status") != "valid":
+            if row.get("status") == "duplicate":
                 skipped_count += 1
+                continue
+            if row.get("status") != "valid":
+                error_count += 1
+                errors.append(
+                    f"{row.get('excel_row', '?')}행: "
+                    f"{row.get('message') or '등록할 수 없는 행입니다.'}"
+                )
                 continue
 
             tracking_number = (
@@ -533,33 +675,48 @@ class ShipmentService:
                 skipped_count += 1
                 continue
 
-            for item in row.get("items", []):
-                shipment_id = self.shipment_repository.create_shipment(
-                    order_id=int(item["order_id"]),
-                    order_item_id=int(item["order_item_id"]),
-                    supplier_id=(
-                        int(item["supplier_id"])
-                        if item.get("supplier_id") is not None
-                        else None
-                    ),
-                    courier_name=row["carrier"],
-                    tracking_number=tracking_number,
-                    shipment_status="배송중",
-                    purchase_order_id=int(
-                        item["purchase_order_id"]
-                    ),
-                )
+            try:
+                items = row.get("items", [])
+                if not items:
+                    raise ValueError("일치하는 주문상품이 없습니다.")
 
-                created_shipment_ids.append(int(shipment_id))
-                shipment_count += 1
-                processed_orders.add(int(item["order_id"]))
+                for item in items:
+                    shipment_id = self.shipment_repository.create_shipment(
+                        order_id=int(item["order_id"]),
+                        order_item_id=int(item["order_item_id"]),
+                        supplier_id=(
+                            int(item["supplier_id"])
+                            if item.get("supplier_id") is not None
+                            else None
+                        ),
+                        courier_name=row["carrier"],
+                        tracking_number=tracking_number,
+                        shipment_status="배송중",
+                        purchase_order_id=int(
+                            item["purchase_order_id"]
+                        ),
+                    )
+
+                    created_shipment_ids.append(int(shipment_id))
+                    shipment_count += 1
+                    processed_orders.add(int(item["order_id"]))
+                success_count += 1
+            except Exception as exc:
+                error_count += 1
+                errors.append(
+                    f"{row.get('excel_row', '?')}행: {exc}"
+                )
 
         coupang_result = self._send_coupang_shipments(
             created_shipment_ids
         )
         return {
+            "total_count": total_count,
+            "success_count": success_count,
             "shipment_count": shipment_count,
             "order_count": len(processed_orders),
             "skipped_count": skipped_count,
+            "error_count": error_count,
+            "errors": errors,
             **coupang_result,
         }

@@ -207,13 +207,27 @@ class SimpleShipmentImportDialog(tk.Toplevel):
         messagebox.showinfo(
             "등록 완료",
             (
-                f"송장 저장: {result['shipment_count']}건\n"
-                f"처리 주문: {result['order_count']}건\n"
+                f"전체 행: {result['total_count']}건\n"
+                f"등록 성공: {result['success_count']}건\n"
                 f"건너뜀: {result['skipped_count']}건\n"
+                f"오류: {result['error_count']}건\n"
                 f"쿠팡 전송 성공: "
                 f"{result.get('coupang_success_count', 0)}건\n"
                 f"쿠팡 전송 실패: "
                 f"{result.get('coupang_failed_count', 0)}건"
+                + (
+                    "\n" + "\n".join(
+                        result.get("coupang_skipped_messages", [])
+                    )
+                    if result.get("coupang_skipped_messages")
+                    else ""
+                )
+                + (
+                    "\n\n오류 내역:\n"
+                    + "\n".join(result["errors"][:10])
+                    if result["errors"]
+                    else ""
+                )
             ),
             parent=self,
         )

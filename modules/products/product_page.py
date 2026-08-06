@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
 from modules.products.product_dialog import ProductDialog
 from modules.products.product_supplier_dialog import ProductSupplierDialog
 from modules.products.product_repository import ProductRepository
-from modules.notion_sync.product_notion_sync_service import ProductNotionSyncService
+from modules.notion_sync.product_notion_sync_service import NotionProductSyncService
 
 
 class ProductPage(QWidget):
@@ -78,8 +78,8 @@ class ProductPage(QWidget):
         super().__init__(parent)
 
         self.repository = ProductRepository()
-        self.notion_sync_service = ProductNotionSyncService(
-            repository=self.repository,
+        self.notion_sync_service = NotionProductSyncService(
+            product_repository=self.repository,
         )
         self.current_products: list[dict[str, Any]] = []
 
@@ -223,12 +223,15 @@ class ProductPage(QWidget):
         )
 
         self.notion_selected_button = QPushButton(
-            "선택 상품 Notion"
+            "선택 상품 Notion (준비 중)"
         )
         self.notion_selected_button.setObjectName(
             "notionButton"
         )
         self.notion_selected_button.setEnabled(False)
+        self.notion_selected_button.setToolTip(
+            "Notion 단일 상품 동기화는 아직 지원하지 않습니다."
+        )
 
         self.notion_all_button = QPushButton(
             "전체 상품 Notion"
@@ -1378,28 +1381,10 @@ class ProductPage(QWidget):
     # =========================================================
 
     def sync_selected_product_to_notion(self) -> None:
-        product_id = self._get_selected_product_id()
-        if product_id is None:
-            QMessageBox.information(
-                self,
-                "상품 선택",
-                "Notion에 동기화할 상품을 먼저 선택해 주세요.",
-            )
-            return
-
-        product_name = self._get_selected_product_name()
-        answer = QMessageBox.question(
+        QMessageBox.information(
             self,
-            "Notion 상품 동기화",
-            f"'{product_name}' 상품을 Notion 상품 DB에 업로드하거나 갱신하시겠습니까?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if answer != QMessageBox.StandardButton.Yes:
-            return
-
-        self._run_notion_sync(
-            lambda: self.notion_sync_service.sync_product(product_id)
+            "선택 상품 Notion",
+            "Notion 단일 상품 동기화는 아직 지원하지 않습니다.",
         )
 
     def sync_all_products_to_notion(self) -> None:
@@ -1415,7 +1400,7 @@ class ProductPage(QWidget):
             return
 
         self._run_notion_sync(
-            self.notion_sync_service.sync_all_products
+            self.notion_sync_service.sync_products
         )
 
     def _run_notion_sync(self, operation: Any) -> None:
@@ -1643,9 +1628,7 @@ class ProductPage(QWidget):
         self.supplier_button.setEnabled(
             has_selection
         )
-        self.notion_selected_button.setEnabled(
-            has_selection
-        )
+        self.notion_selected_button.setEnabled(False)
         self.toggle_active_button.setEnabled(
             has_selection
         )

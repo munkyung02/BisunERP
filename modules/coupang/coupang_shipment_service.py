@@ -79,6 +79,22 @@ class CoupangShipmentService:
                 "message": "이미 쿠팡 전송이 완료된 송장입니다.",
             }
 
+        required_identifiers = (
+            shipment["shipment_box_id"],
+            shipment["coupang_order_id"],
+            shipment["vendor_item_id"],
+        )
+        if any(
+            not str(value or "").strip()
+            for value in required_identifiers
+        ):
+            return {
+                "shipment_id": int(shipment_id),
+                "skipped": True,
+                "succeed": False,
+                "message": "API skipped (Excel order)",
+            }
+
         carrier_code = self._carrier_code(
             shipment["courier_name"]
         )
