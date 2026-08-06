@@ -1,0 +1,21 @@
+**/__pycache__/
+*.pyc
+
+data/*.db
+output/
+backup/
+logs/
+Microsoft/
+
+.env
+
+# Temporary Excel files only; keep templates and sample workbooks trackable.
+~$*.xlsx
+~$*.xls
+~$*.xlsm
+*.tmp.xlsx
+*.tmp.xls
+*.tmp.xlsm
+*.temp.xlsx
+*.temp.xls
+*.temp.xlsm
