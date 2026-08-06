@@ -909,9 +909,10 @@ class ShipmentPage(ttk.Frame):
         )
 
     def export_channel_shipments(self) -> None:
-        """아직 내보내지 않은 쿠팡 배송중 송장을 생성합니다."""
+        """아직 내보내지 않은 채널별 배송중 송장을 생성합니다."""
         try:
-            result = self.channel_export_service.export_coupang()
+            coupang_result = self.channel_export_service.export_coupang()
+            smartstore_result = self.channel_export_service.export_smartstore()
         except Exception as error:
             messagebox.showerror(
                 "채널별 송장파일 생성 오류",
@@ -920,26 +921,38 @@ class ShipmentPage(ttk.Frame):
             )
             return
 
-        if not result.get("created"):
+        if not coupang_result.get("created") and not smartstore_result.get("created"):
             messagebox.showinfo(
                 "채널별 송장파일 생성",
-                str(result.get("message") or "생성 대상이 없습니다."),
+                (
+                    f"쿠팡: {coupang_result.get('message', '생성 대상 없음')}\n"
+                    f"스마트스토어: {smartstore_result.get('message', '생성 대상 없음')}\n"
+                    "메타데이터 없음: "
+                    f"{smartstore_result.get('missing_metadata_count', 0):,}건"
+                ),
                 parent=self,
             )
             return
 
+        output_paths = [
+            str(result.get("output_file_path"))
+            for result in (coupang_result, smartstore_result)
+            if result.get("created")
+        ]
         messagebox.showinfo(
             "채널별 송장파일 생성 완료",
             (
-                f"쿠팡: {result.get('exported_count', 0):,}건\n"
-                "스마트스토어: 템플릿 필요\n\n"
-                f"저장 위치\n{result.get('output_file_path', '')}"
+                f"쿠팡: {coupang_result.get('exported_count', 0):,}건\n"
+                f"스마트스토어: {smartstore_result.get('exported_count', 0):,}건\n"
+                "스마트스토어 메타데이터 없음: "
+                f"{smartstore_result.get('missing_metadata_count', 0):,}건\n\n"
+                "저장 위치\n" + "\n".join(output_paths)
             ),
             parent=self,
         )
 
     def reexport_selected_channel_shipments(self) -> None:
-        """저장된 송장 목록에서 선택한 쿠팡 송장을 명시적으로 재출력합니다."""
+        """저장된 송장 목록에서 선택한 채널 송장을 명시적으로 재출력합니다."""
         selection = self.saved_tree.selection()
         if not selection:
             messagebox.showwarning(
@@ -958,7 +971,11 @@ class ShipmentPage(ttk.Frame):
             return
 
         try:
-            result = self.channel_export_service.export_coupang(
+            coupang_result = self.channel_export_service.export_coupang(
+                shipment_ids=shipment_ids,
+                reexport=True,
+            )
+            smartstore_result = self.channel_export_service.export_smartstore(
                 shipment_ids=shipment_ids,
                 reexport=True,
             )
@@ -970,19 +987,32 @@ class ShipmentPage(ttk.Frame):
             )
             return
 
-        if not result.get("created"):
+        if not coupang_result.get("created") and not smartstore_result.get("created"):
             messagebox.showinfo(
                 "선택 송장 재출력",
-                str(result.get("message") or "재출력 대상이 없습니다."),
+                (
+                    f"쿠팡: {coupang_result.get('message', '재출력 대상 없음')}\n"
+                    f"스마트스토어: {smartstore_result.get('message', '재출력 대상 없음')}\n"
+                    "메타데이터 없음: "
+                    f"{smartstore_result.get('missing_metadata_count', 0):,}건"
+                ),
                 parent=self,
             )
             return
 
+        output_paths = [
+            str(result.get("output_file_path"))
+            for result in (coupang_result, smartstore_result)
+            if result.get("created")
+        ]
         messagebox.showinfo(
             "선택 송장 재출력 완료",
             (
-                f"쿠팡: {result.get('exported_count', 0):,}건\n\n"
-                f"저장 위치\n{result.get('output_file_path', '')}"
+                f"쿠팡: {coupang_result.get('exported_count', 0):,}건\n"
+                f"스마트스토어: {smartstore_result.get('exported_count', 0):,}건\n"
+                "스마트스토어 메타데이터 없음: "
+                f"{smartstore_result.get('missing_metadata_count', 0):,}건\n\n"
+                "저장 위치\n" + "\n".join(output_paths)
             ),
             parent=self,
         )
