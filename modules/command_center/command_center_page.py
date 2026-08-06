@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import tkinter as tk
+import threading
 from tkinter import messagebox, ttk
 from typing import Callable
 
 from modules.command_center.command_center_service import CommandCenterService
+from modules.command_center.daily_operation_summary_dialog import (
+    DailyOperationSummaryDialog,
+)
 
 
 class CommandCenterPage(ttk.Frame):
@@ -45,6 +49,7 @@ class CommandCenterPage(ttk.Frame):
             for key, _title, _unit in self.CARDS
         }
         self.notice_var = tk.StringVar(value="업무 현황을 불러오는 중입니다.")
+        self._daily_operation_running = False
         self._build_ui()
         self.after(100, self.refresh_data)
 
@@ -103,6 +108,18 @@ class CommandCenterPage(ttk.Frame):
             state="disabled",
         ).grid(row=0, column=5, sticky="ew")
         actions.columnconfigure(5, weight=1)
+        self.daily_operation_button = ttk.Button(
+            actions,
+            text="오늘 업무 시작",
+            command=self._start_daily_operation,
+        )
+        self.daily_operation_button.grid(
+            row=1,
+            column=0,
+            columnspan=6,
+            pady=(10, 0),
+            sticky="ew",
+        )
 
         body = ttk.Panedwindow(self, orient="horizontal")
         body.grid(row=3, column=0, padx=22, pady=(0, 10), sticky="nsew")
@@ -198,6 +215,52 @@ class CommandCenterPage(ttk.Frame):
     def _run_auto_mapping(self) -> None:
         result = self.service.run_auto_mapping()
         self._show_result("자동매핑", result)
+
+    def _start_daily_operation(self) -> None:
+        if self._daily_operation_running:
+            return
+        self._daily_operation_running = True
+        self.daily_operation_button.configure(state="disabled")
+        self.notice_var.set("오늘 업무를 시작합니다...")
+
+        def progress(step_name: str) -> None:
+            self.after(
+                0,
+                lambda name=step_name: self.notice_var.set(f"실행 중 · {name}"),
+            )
+
+        def worker() -> None:
+            try:
+                result = self.service.run_daily_operation(progress)
+            except Exception as error:
+                self.after(0, lambda err=error: self._finish_daily_operation(None, err))
+            else:
+                self.after(0, lambda value=result: self._finish_daily_operation(value))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _finish_daily_operation(
+        self,
+        result: dict | None,
+        error: Exception | None = None,
+    ) -> None:
+        self._daily_operation_running = False
+        self.daily_operation_button.configure(state="normal")
+        if error is not None or result is None:
+            message = str(error or "오늘 업무 실행 결과를 확인할 수 없습니다.")
+            self.notice_var.set(f"오늘 업무 실행 실패: {message}")
+            messagebox.showerror("오늘 업무 시작 실패", message, parent=self)
+            self.refresh_data()
+            return
+
+        self.notice_var.set(
+            "오늘 업무 완료 · "
+            f"PASS {result.get('pass_count', 0):,} · "
+            f"WARNING {result.get('warning_count', 0):,} · "
+            f"FAILED {result.get('failed_count', 0):,}"
+        )
+        self.refresh_data()
+        DailyOperationSummaryDialog(self, result)
 
     def _show_result(self, action: str, result: dict) -> None:
         message = str(result.get("message") or "")
