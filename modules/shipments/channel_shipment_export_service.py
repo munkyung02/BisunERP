@@ -42,6 +42,23 @@ class ChannelShipmentExportService:
         "구독신청회차", "구독진행회차", "구독배송희망일", "배송태그 유형",
         "출입방법 유형", "출입방법 내용", "수령위치 유형", "수령위치 내용",
     )
+    ESM_GMARKET_SHEET_NAME = "Sheet 1"
+    ESM_GMARKET_HEADERS = (
+        "판매아이디", "주문번호", "주문상태", "상품번호", "상품명", "발송마감일",
+        "택배사명(발송방법)", "송장번호", "발송정책", "주문일(결제확인전)",
+        "수령인명", "구매자명", "선물주문여부", "선물수락일시", "설치주문여부",
+        "설치예정일", "수량", "옵션", "추가구성", "사은품", "사은품 관리코드",
+        "덤", "덤 관리코드", "판매단가", "판매금액", "판매자 관리코드",
+        "판매자 상세관리코드", "수령인 휴대폰", "수령인 전화번호",
+        "배송지변경 여부", "우편번호", "주소", "배송시 요구사항",
+        "배송비 결제방법", "배송비 금액", "배송번호", "배송지연사유",
+        "수령인 통관정보", "SKU번호 및 수량", "구매자아이디", "구매자 휴대폰",
+        "구매자 전화번호", "판매방식", "주문종류", "장바구니번호(결제번호)",
+        "결제일", "주문일", "발송예정일", "정산예정금액", "서비스이용료",
+        "판매자쿠폰할인", "구매쿠폰적용금액", "우수회원할인", "복수구매할인",
+        "스마일캐시적립", "제휴사명", "배송라벨출력일", "SSG 상품번호",
+        "SSG 원주문번호",
+    )
 
     def __init__(
         self,
@@ -159,6 +176,132 @@ class ChannelShipmentExportService:
             "exported_at": exported_at.isoformat(timespec="seconds"),
         }
 
+    def export_gmarket(
+        self,
+        *,
+        shipment_ids: Iterable[int] | None = None,
+        reexport: bool = False,
+    ) -> dict[str, Any]:
+        if reexport and shipment_ids is None:
+            raise ValueError("재출력할 송장을 선택해 주세요.")
+
+        missing_metadata_count = self.repository.count_gmarket_missing_metadata(
+            shipment_ids=shipment_ids,
+        )
+        candidates = self.repository.get_gmarket_candidates(
+            shipment_ids=shipment_ids,
+            include_exported=reexport,
+        )
+        (
+            output_rows,
+            export_rows,
+            incomplete_raw_count,
+            missing_required_count,
+        ) = self._build_gmarket_rows(candidates)
+
+        if not export_rows:
+            message = (
+                "선택한 송장 중 Gmarket 재출력 대상이 없습니다."
+                if reexport
+                else "새로 생성할 Gmarket 발송정보 대상이 없습니다."
+            )
+            return {
+                "created": False,
+                "message": message,
+                "exported_count": 0,
+                "missing_metadata_count": missing_metadata_count,
+                "incomplete_raw_count": incomplete_raw_count,
+                "missing_required_count": missing_required_count,
+            }
+
+        output_path, exported_at = self._build_gmarket_output_path()
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        self._write_workbook(
+            output_path,
+            list(self.ESM_GMARKET_HEADERS),
+            output_rows,
+            worksheet_name=self.ESM_GMARKET_SHEET_NAME,
+        )
+
+        batch_id = uuid4().hex
+        self.repository.record_export(
+            rows=export_rows,
+            export_batch_id=batch_id,
+            export_file=str(output_path),
+            is_reexport=reexport,
+        )
+        return {
+            "created": True,
+            "message": f"Gmarket 발송정보 파일 {len(export_rows):,}건을 생성했습니다.",
+            "output_file_path": str(output_path),
+            "worksheet_name": self.ESM_GMARKET_SHEET_NAME,
+            "header_count": len(self.ESM_GMARKET_HEADERS),
+            "exported_count": len(export_rows),
+            "missing_metadata_count": missing_metadata_count,
+            "incomplete_raw_count": incomplete_raw_count,
+            "missing_required_count": missing_required_count,
+            "shipment_ids": [int(row["shipment_id"]) for row in export_rows],
+            "export_batch_id": batch_id,
+            "is_reexport": reexport,
+            "exported_at": exported_at.isoformat(timespec="seconds"),
+        }
+
+    def _build_gmarket_rows(
+        self,
+        candidates: list[dict[str, Any]],
+    ) -> tuple[list[dict[str, str]], list[dict[str, Any]], int, int]:
+        output_rows: list[dict[str, str]] = []
+        export_rows: list[dict[str, Any]] = []
+        incomplete_raw_count = 0
+        missing_required_count = 0
+
+        for candidate in candidates:
+            try:
+                raw = json.loads(str(candidate.get("raw_source_json") or "{}"))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                incomplete_raw_count += 1
+                continue
+            if not isinstance(raw, dict) or any(
+                header not in raw for header in self.ESM_GMARKET_HEADERS
+            ):
+                incomplete_raw_count += 1
+                continue
+
+            row = {
+                header: self._text(raw.get(header))
+                for header in self.ESM_GMARKET_HEADERS
+            }
+            row["판매아이디"] = (
+                self._text(candidate.get("original_platform_name"))
+                or self._text(candidate.get("sales_channel"))
+                or self._text(raw.get("판매아이디"))
+            )
+            row["주문번호"] = self._text(candidate.get("channel_order_number"))
+            row["택배사명(발송방법)"] = self._text(candidate.get("courier_name"))
+            row["송장번호"] = self._text(candidate.get("tracking_number"))
+
+            if any(
+                not row[header]
+                for header in (
+                    "판매아이디",
+                    "주문번호",
+                    "택배사명(발송방법)",
+                    "송장번호",
+                )
+            ):
+                missing_required_count += 1
+                continue
+
+            output_rows.append(row)
+            export_rows.append(candidate)
+
+        return (
+            output_rows,
+            export_rows,
+            incomplete_raw_count,
+            missing_required_count,
+        )
+
     def _build_smartstore_rows(
         self,
         candidates: list[dict[str, Any]],
@@ -263,6 +406,18 @@ class ChannelShipmentExportService:
         while True:
             directory = self.output_root / current.strftime("%Y%m%d")
             path = directory / f"네이버_발송처리_{current.strftime('%Y%m%d_%H%M%S')}.xlsx"
+            if not path.exists():
+                return path, current
+            current += timedelta(seconds=1)
+
+    def _build_gmarket_output_path(self) -> tuple[Path, datetime]:
+        current = self.now_provider()
+        while True:
+            directory = self.output_root / current.strftime("%Y%m%d")
+            path = directory / (
+                "ESM_Gmarket_발송정보일괄등록_"
+                f"{current.strftime('%Y%m%d_%H%M%S')}.xlsx"
+            )
             if not path.exists():
                 return path, current
             current += timedelta(seconds=1)
