@@ -56,6 +56,38 @@ class SmartStoreOrderExcelParser(BaseOrderExcelParser):
                     "total_price": line_total,
                     "purchase_round": "",
                     "mapping_status": "미매핑",
+                    "channel_metadata": {
+                        "platform": self.platform_name,
+                        "original_platform_name": self.clean_text(row.get("판매채널")),
+                        "channel_order_number": self.clean_identifier(row.get("주문번호")),
+                        "channel_item_number": self.clean_identifier(
+                            row.get("상품주문번호")
+                        ),
+                        "bundle_shipment_number": "",
+                        "option_id": (
+                            self.clean_identifier(row.get("옵션ID"))
+                            or self.clean_identifier(row.get("옵션번호"))
+                        ),
+                        "seller_product_code": "",
+                        "vendor_item_id": "",
+                        "shipment_box_id": "",
+                        "external_order_id": "",
+                        "delivery_method": (
+                            self.clean_text(row.get("배송방법"))
+                            or self.clean_text(row.get("배송방식"))
+                            or self.clean_text(row.get("배송유형"))
+                        ),
+                        "sales_channel": self.clean_text(row.get("판매채널")),
+                        "product_identifier": (
+                            self.clean_identifier(row.get("상품번호"))
+                            or self.clean_identifier(row.get("상품ID"))
+                        ),
+                        "raw_source_row": {
+                            str(column): self.clean_text(value)
+                            for column, value in row.to_dict().items()
+                        },
+                        "source_file": source_file,
+                    },
                 })
                 total_amount += line_total
 

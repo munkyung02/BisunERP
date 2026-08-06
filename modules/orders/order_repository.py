@@ -5,6 +5,7 @@ import unicodedata
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 from modules.mapping_engine.engine import SmartMappingEngine
+from modules.orders.channel_metadata_repository import ChannelMetadataRepository
 
 
 
@@ -75,6 +76,9 @@ class OrderRepository:
 
         self.mapping_engine = SmartMappingEngine()
         self._ensure_mapping_rule_schema()
+        self.channel_metadata_repository = ChannelMetadataRepository(
+            self.database_path
+        )
 
 
     def _ensure_mapping_rule_schema(self) -> None:
@@ -1086,7 +1090,7 @@ class OrderRepository:
                 )
 
                 for item in valid_items:
-                    connection.execute(
+                    item_cursor = connection.execute(
                         """
                         INSERT INTO order_items (
                             order_id,
@@ -1123,6 +1127,14 @@ class OrderRepository:
                             item["mapping_status"],
                         ),
                     )
+
+                    if item["channel_metadata"] is not None:
+                        self.channel_metadata_repository.save_with_connection(
+                            connection,
+                            order_id=order_id,
+                            order_item_id=int(item_cursor.lastrowid),
+                            metadata=item["channel_metadata"],
+                        )
 
                 connection.commit()
 
@@ -2322,6 +2334,11 @@ class OrderRepository:
                     ),
                     "mapping_status": (
                         item_mapping_status
+                    ),
+                    "channel_metadata": (
+                        item.get("channel_metadata")
+                        if item.get("channel_metadata") is not None
+                        else None
                     ),
                 }
             )

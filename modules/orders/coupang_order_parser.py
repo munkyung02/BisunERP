@@ -46,6 +46,35 @@ class CoupangOrderExcelParser(BaseOrderExcelParser):
                     "total_price": line_total,
                     "purchase_round": "",
                     "mapping_status": "미매핑",
+                    "channel_metadata": {
+                        "platform": self.platform_name,
+                        "original_platform_name": (
+                            self.clean_text(row.get("판매채널")) or self.platform_name
+                        ),
+                        "channel_order_number": self.clean_identifier(row.get("주문번호")),
+                        "channel_item_number": "",
+                        "bundle_shipment_number": self.clean_identifier(
+                            row.get("묶음배송번호")
+                        ),
+                        "option_id": self.clean_identifier(row.get("옵션ID")),
+                        "seller_product_code": (
+                            self.clean_identifier(row.get("판매자상품코드"))
+                            or self.clean_identifier(row.get("업체상품코드"))
+                        ),
+                        "vendor_item_id": self.clean_identifier(row.get("vendorItemId")),
+                        "shipment_box_id": self.clean_identifier(row.get("shipmentBoxId")),
+                        "external_order_id": self.clean_identifier(row.get("orderId")),
+                        "delivery_method": "",
+                        "sales_channel": self.clean_text(row.get("판매채널")),
+                        "product_identifier": self.clean_identifier(
+                            row.get("노출상품ID")
+                        ),
+                        "raw_source_row": {
+                            str(column): self.clean_text(value)
+                            for column, value in row.to_dict().items()
+                        },
+                        "source_file": source_file,
+                    },
                 })
                 total_amount += line_total
 
