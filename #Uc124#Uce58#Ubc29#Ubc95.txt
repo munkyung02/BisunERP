@@ -1,0 +1,15 @@
+BisunERP v3.2 통합 패치
+
+현재 확인된 누락 파일을 복구하고 쿠팡 주문·송장 API 관련 최신 파일을 한 번에 적용합니다.
+
+권장 적용
+1. ZIP을 ERP 폴더 밖에 압축 해제
+2. 현재 ERP 루트에서 PowerShell 실행
+3. 아래 명령 실행
+
+powershell -ExecutionPolicy Bypass -File "압축해제경로\패치적용.ps1" -ProjectRoot "C:\Users\USER\Downloads\BisunERP_v2_8_QUICK_PRODUCT_REGISTRATION_COMPLETE\work_v24"
+
+적용 후
+python main.py
+
+패치 스크립트는 기존 파일을 backup\full_patch_날짜시간 폴더에 먼저 백업합니다.

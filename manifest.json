@@ -1,0 +1,25 @@
+{
+  "version": "3.2",
+  "files": [
+    "app/main_window.py",
+    "modules/coupang/__init__.py",
+    "modules/coupang/coupang_api.py",
+    "modules/coupang/coupang_auth.py",
+    "modules/coupang/coupang_order_service.py",
+    "modules/coupang/coupang_scheduler.py",
+    "modules/coupang/coupang_shipment_service.py",
+    "modules/coupang/coupang_sync_page.py",
+    "modules/mappings/__init__.py",
+    "modules/mappings/dictionary.py",
+    "modules/mappings/mapping_engine.py",
+    "modules/mappings/scorer.py",
+    "modules/settings/settings_page.py",
+    "modules/settings/settings_service.py",
+    "modules/shipments/shipment_page.py",
+    "modules/shipments/shipment_repository.py",
+    "modules/shipments/shipment_service.py",
+    "modules/shipments/simple_import_dialog.py",
+    "설치방법.txt",
+    "패치적용.ps1"
+  ]
+}
