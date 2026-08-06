@@ -3,6 +3,7 @@ from __future__ import annotations
 from modules.oms_adapters.legacy_excel_adapter import LegacyExcelOrderAdapter
 from modules.oms_adapters.registry import OMSAdapterRegistry
 from modules.orders.coupang_order_parser import CoupangOrderExcelParser
+from modules.orders.esm_order_parser import ESMOrderExcelParser
 from modules.orders.smartstore_order_parser import SmartStoreOrderExcelParser
 
 
@@ -25,6 +26,15 @@ def create_default_adapter_registry() -> OMSAdapterRegistry:
             display_name="스마트스토어 주문 Excel",
             version="1.0",
             priority=200,
+        )
+    )
+    registry.register(
+        LegacyExcelOrderAdapter(
+            ESMOrderExcelParser(),
+            adapter_id="esm.excel.orders",
+            display_name="ESM Plus 주문 Excel",
+            version="1.0",
+            priority=300,
         )
     )
     return registry
