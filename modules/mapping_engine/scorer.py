@@ -67,7 +67,10 @@ class ProductScorer:
             right.weight is not None
         ):
 
-            if left.weight == right.weight:
+            if (
+                left.weight == right.weight
+                and left.weight_unit == right.weight_unit
+            ):
 
                 weight_score = self.WEIGHT_SCORE
 
@@ -85,7 +88,10 @@ class ProductScorer:
             right.quantity is not None
         ):
 
-            if left.quantity == right.quantity:
+            if (
+                left.quantity == right.quantity
+                and left.quantity_unit == right.quantity_unit
+            ):
 
                 quantity_score = self.QUANTITY_SCORE
 
@@ -97,7 +103,7 @@ class ProductScorer:
 
         option_score = 0
 
-        if left.option == right.option:
+        if left.option and left.option.lower() == right.option.lower():
 
             option_score = self.OPTION_SCORE
 

@@ -26,6 +26,8 @@ class ParsedProduct:
 
     option: str
 
+    attributes: tuple[str, ...]
+
 
 class ProductParser:
 
@@ -40,8 +42,17 @@ class ProductParser:
     )
 
     OPTION_PATTERN = re.compile(
-        r'(특대|대|중|소|L|M|S|XL|XXL)',
+        r'(?<![0-9a-z가-힣])(특대|대|중|소|xxl|xl|l|m|s)(?![0-9a-z가-힣])',
         re.IGNORECASE
+    )
+
+    PROTECTED_ATTRIBUTES = (
+        "국내산", "국산", "수입산", "자연산", "양식",
+        "냉장", "냉동", "생물", "활어", "급냉",
+        "손질", "손질완료", "완전손질",
+        "필렛", "회", "횟감", "구이", "구이용", "찜", "탕",
+        "뼈제거", "무뼈", "순살", "껍질제거", "내장제거",
+        "특대", "대자", "중자", "소자", "특품", "상급",
     )
 
     def __init__(self):
@@ -59,6 +70,12 @@ class ProductParser:
         quantity_unit = ""
 
         option = ""
+
+        attributes = tuple(
+            attribute
+            for attribute in self.PROTECTED_ATTRIBUTES
+            if attribute in normalized.replace(" ", "")
+        )
 
         name = normalized
 
@@ -118,4 +135,6 @@ class ProductParser:
             quantity_unit=quantity_unit,
 
             option=option,
+
+            attributes=attributes,
         )

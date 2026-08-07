@@ -1,10 +1,9 @@
-import re
 import sqlite3
-import unicodedata
 
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 from modules.mapping_engine.engine import SmartMappingEngine
+from modules.mapping_engine.normalizer import compact_product_name
 from modules.orders.channel_metadata_repository import ChannelMetadataRepository
 
 
@@ -195,10 +194,17 @@ class OrderRepository:
                     ON p.id = r.product_id
                    AND p.is_active = 1
 
+                INNER JOIN suppliers AS s
+                    ON s.id = p.supplier_id
+                   AND s.is_active = 1
+
                 WHERE (
                     oi.product_id IS NULL
                     OR oi.mapping_status = '미매핑'
                 )
+                  AND COALESCE(oi.mapping_status, '') NOT IN (
+                      '수동매핑', '추천확정', '신규상품매핑'
+                  )
                 {extra_where}
                 """,
                 parameters,
@@ -1303,107 +1309,8 @@ class OrderRepository:
     def _normalize_product_text(
         value: Any,
     ) -> str:
-        """
-        상품 비교에 사용할 표준 문자열을 만듭니다.
-
-        예:
-        해담_생참치회 500g
-        생참치회500G
-        해담 생참치회 500 g
-
-        모두 비슷한 형태로 정리합니다.
-        """
-
-        if value is None:
-            return ""
-
-        text = unicodedata.normalize(
-            "NFKC",
-            str(value),
-        )
-
-        text = text.lower().strip()
-
-        # 괄호 안의 상세 설명 제거
-        text = re.sub(
-            r"\([^)]*\)",
-            " ",
-            text,
-        )
-        text = re.sub(
-            r"\[[^\]]*\]",
-            " ",
-            text,
-        )
-        text = re.sub(
-            r"\{[^}]*\}",
-            " ",
-            text,
-        )
-
-        # 자주 붙는 공급처 및 브랜드 접두어 제거
-        supplier_prefixes = [
-            "해담",
-            "외현농원",
-            "주영씨푸드",
-            "비선상회",
-        ]
-
-        for prefix in supplier_prefixes:
-            text = re.sub(
-                rf"^{re.escape(prefix)}[\s_\-]*",
-                "",
-                text,
-            )
-
-        # 상품 개수 관련 표현 제거
-        text = re.sub(
-            r"\b\d+\s*(개|팩|봉|박스|세트)\b",
-            " ",
-            text,
-        )
-
-        # 인분 표현 제거
-        text = re.sub(
-            r"\b\d+\s*[~\-]\s*\d+\s*인분\b",
-            " ",
-            text,
-        )
-        text = re.sub(
-            r"\b\d+\s*인분\b",
-            " ",
-            text,
-        )
-
-        # 과수 표현 제거: 7~8과
-        text = re.sub(
-            r"\b\d+\s*[~\-]\s*\d+\s*과\b",
-            " ",
-            text,
-        )
-
-        # 비교에 불필요한 기호 제거
-        text = re.sub(
-            r"[/_,.\-+]",
-            " ",
-            text,
-        )
-
-        # 단위 앞뒤 공백 정리
-        text = re.sub(
-            r"(\d+)\s*(kg|g|ml|l)\b",
-            r"\1\2",
-            text,
-        )
-
-        # 모든 공백 제거
-        text = re.sub(
-            r"\s+",
-            "",
-            text,
-        )
-
-        return text
+        """Return the canonical mapping-engine normalization."""
+        return compact_product_name(value)
 
     @classmethod
     def _build_product_match_keys(
@@ -1486,6 +1393,9 @@ class OrderRepository:
                     oi.product_id IS NULL
                     OR oi.mapping_status = '미매핑'
                 )
+                  AND COALESCE(oi.mapping_status, '') NOT IN (
+                      '수동매핑', '추천확정', '신규상품매핑'
+                  )
 
                 {order_condition}
 
@@ -1508,6 +1418,10 @@ class OrderRepository:
 
                 FROM products AS p
 
+                INNER JOIN suppliers AS s
+                    ON s.id = p.supplier_id
+                   AND s.is_active = 1
+
                 WHERE p.is_active = 1
 
                 ORDER BY p.id ASC
@@ -1527,13 +1441,8 @@ class OrderRepository:
                         row["platform"] or ""
                     ).strip()
 
-                    order_keys = self._build_product_match_keys(
-                        row["platform_product_name"],
-                        row["option_name"],
-                    )
-
                     eligible_products = []
-                    exact_candidates = []
+                    deterministic_candidates: dict[int, tuple[int, Any]] = {}
 
                     for product in product_rows:
                         product_platform = str(
@@ -1549,45 +1458,55 @@ class OrderRepository:
 
                         eligible_products.append(product)
 
-                        product_keys: set[str] = set()
-
-                        product_keys.update(
-                            self._build_product_match_keys(
+                        ranks = [
+                            rank
+                            for candidate_name in (
                                 product["platform_product_name"],
-                                product["option_name"],
-                            )
-                        )
-                        product_keys.update(
-                            self._build_product_match_keys(
                                 product["product_name"],
-                                product["option_name"],
-                            )
-                        )
-                        product_keys.update(
-                            self._build_product_match_keys(
                                 product["supplier_product_name"],
-                                product["option_name"],
                             )
-                        )
-
-                        if order_keys & product_keys:
-                            exact_candidates.append(product)
+                            if (
+                                rank := self.mapping_engine.deterministic_rank(
+                                    row["platform_product_name"],
+                                    row["option_name"],
+                                    candidate_name,
+                                    product["option_name"],
+                                )
+                            ) is not None
+                        ]
+                        if ranks:
+                            deterministic_candidates[int(product["id"])] = (
+                                min(ranks),
+                                product,
+                            )
 
                     selected_product = None
                     mapping_method = ""
 
-                    # 정규화 완전일치 후보가 정확히 하나일 때만 자동 확정합니다.
-                    if len(exact_candidates) == 1:
-                        selected_product = exact_candidates[0]
-                        mapping_method = "exact"
-
-                    elif len(exact_candidates) > 1:
-                        ambiguous_count += 1
-                        continue
+                    if deterministic_candidates:
+                        highest_rank = min(
+                            rank for rank, _product in deterministic_candidates.values()
+                        )
+                        highest_candidates = [
+                            product
+                            for rank, product in deterministic_candidates.values()
+                            if rank == highest_rank
+                        ]
+                        if len(highest_candidates) == 1:
+                            selected_product = highest_candidates[0]
+                            mapping_method = "exact"
+                        else:
+                            ambiguous_count += 1
+                            continue
 
                     # 완전일치가 없을 때만 스마트 점수 추천을 실행합니다.
                     elif eligible_products:
                         engine_products: list[dict[str, Any]] = []
+                        fuzzy_products: dict[int, Any] = {}
+                        source_signature = self.mapping_engine.build_signature(
+                            row["platform_product_name"],
+                            row["option_name"],
+                        )
 
                         for product in eligible_products:
                             comparison_parts = [
@@ -1610,12 +1529,25 @@ class OrderRepository:
                             if not comparison_name:
                                 continue
 
+                            target_signature = self.mapping_engine.build_signature(
+                                product["product_name"]
+                                or product["platform_product_name"]
+                                or product["supplier_product_name"],
+                                product["option_name"],
+                            )
+                            if not self.mapping_engine.signatures_compatible(
+                                source_signature,
+                                target_signature,
+                            ):
+                                continue
+
                             engine_products.append(
                                 {
                                     "id": int(product["id"]),
                                     "name": comparison_name,
                                 }
                             )
+                            fuzzy_products[int(product["id"])] = product
 
                         source_parts = [
                             str(
@@ -1655,7 +1587,7 @@ class OrderRepository:
                                 selected_product = next(
                                     (
                                         product
-                                        for product in eligible_products
+                                        for product in fuzzy_products.values()
                                         if int(product["id"])
                                         == int(top.product_id)
                                     ),

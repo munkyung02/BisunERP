@@ -21,40 +21,11 @@ class ProductNameNormalizer:
     """판매처 상품명과 ERP 상품명을 비교하기 위한 정규화 도구."""
 
     DEFAULT_STOP_WORDS = {
-        "국내산",
-        "수입산",
-        "자연산",
-        "양식",
         "산지직송",
         "당일배송",
         "당일발송",
         "당일출고",
-        "프리미엄",
-        "최고급",
-        "고급",
-        "특품",
-        "상품",
-        "정품",
-        "신선",
-        "싱싱한",
-        "급냉",
-        "냉동",
-        "냉장",
-        "생물",
-        "횟감용",
-        "횟감",
-        "회용",
-        "구이용",
-        "찜용",
-        "탕용",
-        "손질완료",
-        "완전손질",
-        "손질",
         "무료배송",
-        "초장증정",
-        "초장포함",
-        "증정",
-        "포함",
         "한정판매",
         "특가",
         "할인",
@@ -82,7 +53,7 @@ class ProductNameNormalizer:
 
     COUNT_PATTERN = re.compile(
         r"(?P<number>\d+)\s*"
-        r"(?P<unit>팩|봉|세트|개|미|마리|입|박스|box)",
+        r"(?P<unit>packs?|sets?|팩|봉|세트|개|미|마리|입|박스|box)",
         flags=re.IGNORECASE,
     )
 
@@ -273,6 +244,10 @@ class ProductNameNormalizer:
             "마리": "미",
             "입": "개",
             "box": "박스",
+            "pack": "팩",
+            "packs": "팩",
+            "set": "세트",
+            "sets": "세트",
         }
 
         def replace(match: re.Match[str]) -> str:
