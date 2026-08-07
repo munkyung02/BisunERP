@@ -9,10 +9,12 @@ from modules.operations_intelligence.models import (
     ChannelSalesMix,
     ProductPurchaseMetrics,
     ProductSalesMetrics,
+    ProductTrend,
     SalesWindowSummary,
     SupplierComparisonResult,
     SupplierComparisonRow,
     SupplierProductComparison,
+    TrendSummary,
 )
 
 
@@ -256,6 +258,149 @@ class SalesIntelligenceRepository:
                 revenue_ratio=float(row["revenue_ratio"] or 0.0),
             )
             for row in rows
+        )
+
+    def get_product_trends(
+        self,
+        *,
+        start_7d: date,
+        start_30d: date,
+        start_90d: date,
+        end_date: date,
+        product_ids: Iterable[int] | None = None,
+    ) -> tuple[ProductTrend, ...]:
+        """Classify historical sales with deterministic, read-only rules."""
+        normalized_ids = self._normalize_product_ids(product_ids)
+        if product_ids is not None and not normalized_ids:
+            return ()
+        product_filter = ""
+        parameters: list[object] = [
+            start_7d.isoformat(), end_date.isoformat(),
+            start_30d.isoformat(), end_date.isoformat(),
+            start_90d.isoformat(), end_date.isoformat(),
+            start_30d.isoformat(), end_date.isoformat(),
+            start_90d.isoformat(), end_date.isoformat(),
+            start_90d.isoformat(), start_30d.isoformat(),
+            end_date.isoformat(), end_date.isoformat(),
+        ]
+        if product_ids is not None:
+            placeholders = ",".join("?" for _ in normalized_ids)
+            product_filter = f"WHERE p.id IN ({placeholders})"
+            parameters.extend(normalized_ids)
+        parameters.extend((
+            end_date.isoformat(), start_30d.isoformat(), start_90d.isoformat(),
+        ))
+
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"""
+                WITH sales AS (
+                    SELECT p.id AS product_id,
+                           COALESCE(p.product_code, '') AS product_code,
+                           p.product_name,
+                           COALESCE(SUM(CASE WHEN DATE(o.ordered_at) BETWEEN ? AND ?
+                               THEN oi.quantity ELSE 0 END), 0) AS quantity_7d,
+                           COALESCE(SUM(CASE WHEN DATE(o.ordered_at) BETWEEN ? AND ?
+                               THEN oi.quantity ELSE 0 END), 0) AS quantity_30d,
+                           COALESCE(SUM(CASE WHEN DATE(o.ordered_at) BETWEEN ? AND ?
+                               THEN oi.quantity ELSE 0 END), 0) AS quantity_90d,
+                           COALESCE(SUM(CASE WHEN DATE(o.ordered_at) BETWEEN ? AND ?
+                               THEN oi.total_price ELSE 0 END), 0) AS revenue_30d,
+                           COUNT(DISTINCT CASE WHEN DATE(o.ordered_at) BETWEEN ? AND ?
+                               THEN DATE(o.ordered_at) END) AS active_days,
+                           COALESCE(SUM(CASE WHEN DATE(o.ordered_at) >= ?
+                               AND DATE(o.ordered_at) < ? THEN oi.quantity ELSE 0 END), 0)
+                               AS baseline_quantity,
+                           COALESCE(MAX(CASE WHEN DATE(o.ordered_at) <= ?
+                               THEN o.ordered_at END), '') AS latest_order_date,
+                           COALESCE(MIN(CASE WHEN DATE(o.ordered_at) <= ?
+                               THEN o.ordered_at END), '') AS first_order_date
+                    FROM products AS p
+                    LEFT JOIN order_items AS oi ON oi.product_id = p.id
+                    LEFT JOIN orders AS o ON o.id = oi.order_id
+                    {product_filter}
+                    GROUP BY p.id, p.product_code, p.product_name
+                ),
+                product_orders AS (
+                    SELECT DISTINCT oi.product_id, oi.order_id
+                    FROM order_items AS oi
+                    INNER JOIN orders AS o ON o.id = oi.order_id
+                    WHERE oi.product_id IS NOT NULL AND DATE(o.ordered_at) <= ?
+                ),
+                mapping AS (
+                    SELECT po.product_id,
+                           COALESCE(SUM(CASE WHEN oi.product_id IS NOT NULL
+                               THEN oi.quantity ELSE 0 END), 0) AS mapped_quantity,
+                           COALESCE(SUM(oi.quantity), 0) AS total_quantity
+                    FROM product_orders AS po
+                    INNER JOIN order_items AS oi ON oi.order_id = po.order_id
+                    GROUP BY po.product_id
+                ),
+                classified AS (
+                    SELECT s.*,
+                           CASE
+                               WHEN s.quantity_90d = 0 THEN 'Inactive'
+                               WHEN DATE(s.first_order_date) >= ? THEN 'New'
+                               WHEN DATE(s.first_order_date) > ?
+                                    OR s.baseline_quantity = 0
+                                    OR s.active_days < 4 THEN 'Insufficient History'
+                               WHEN 20 * s.quantity_30d >= 12 * s.baseline_quantity
+                                    THEN 'Increasing'
+                               WHEN 20 * s.quantity_30d <= 8 * s.baseline_quantity
+                                    THEN 'Decreasing'
+                               ELSE 'Stable'
+                           END AS trend_status,
+                           CASE WHEN COALESCE(m.total_quantity, 0) = 0 THEN NULL
+                                ELSE 1.0 * m.mapped_quantity / m.total_quantity END
+                               AS mapped_ratio
+                    FROM sales AS s
+                    LEFT JOIN mapping AS m ON m.product_id = s.product_id
+                )
+                SELECT * FROM classified ORDER BY product_id
+                """,
+                parameters,
+            ).fetchall()
+        return tuple(
+            ProductTrend(
+                product_id=int(row["product_id"]),
+                product_code=str(row["product_code"] or ""),
+                product_name=str(row["product_name"] or ""),
+                trend_status=str(row["trend_status"] or "Unavailable"),
+                quantity_7d=int(row["quantity_7d"] or 0),
+                quantity_30d=int(row["quantity_30d"] or 0),
+                quantity_90d=int(row["quantity_90d"] or 0),
+                revenue_30d=int(row["revenue_30d"] or 0),
+                latest_order_date=str(row["latest_order_date"] or ""),
+                first_order_date=str(row["first_order_date"] or ""),
+                active_days=int(row["active_days"] or 0),
+                mapped_ratio=(
+                    float(row["mapped_ratio"])
+                    if row["mapped_ratio"] is not None else None
+                ),
+                data_status=(
+                    "Available" if row["mapped_ratio"] is not None
+                    else "Mapping Ratio Unavailable"
+                ),
+            )
+            for row in rows
+        )
+
+    @staticmethod
+    def summarize_trends(trends: Iterable[ProductTrend]) -> TrendSummary:
+        counts = {
+            "Increasing": 0, "Decreasing": 0, "Stable": 0,
+            "New": 0, "Inactive": 0, "Insufficient History": 0,
+        }
+        for trend in trends:
+            if trend.trend_status in counts:
+                counts[trend.trend_status] += 1
+        return TrendSummary(
+            increasing_products=counts["Increasing"],
+            decreasing_products=counts["Decreasing"],
+            stable_products=counts["Stable"],
+            new_products=counts["New"],
+            inactive_products=counts["Inactive"],
+            insufficient_history_products=counts["Insufficient History"],
         )
 
     def get_purchase_schema_capabilities(self) -> dict[str, bool]:

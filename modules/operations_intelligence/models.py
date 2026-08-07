@@ -125,3 +125,30 @@ class SupplierComparisonResult:
     most_used_supplier_id: int | None
     most_used_supplier_name: str
     data_status: str
+
+
+@dataclass(frozen=True)
+class ProductTrend:
+    product_id: int
+    product_code: str
+    product_name: str
+    trend_status: str
+    quantity_7d: int
+    quantity_30d: int
+    quantity_90d: int
+    revenue_30d: int
+    latest_order_date: str
+    first_order_date: str
+    active_days: int
+    mapped_ratio: float | None
+    data_status: str
+
+
+@dataclass(frozen=True)
+class TrendSummary:
+    increasing_products: int
+    decreasing_products: int
+    stable_products: int
+    new_products: int
+    inactive_products: int
+    insufficient_history_products: int

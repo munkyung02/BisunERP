@@ -9,9 +9,11 @@ from modules.operations_intelligence.models import (
     ChannelSalesMix,
     ProductPurchaseMetrics,
     ProductSalesMetrics,
+    ProductTrend,
     SalesWindowSummary,
     SupplierComparisonResult,
     SupplierProductComparison,
+    TrendSummary,
 )
 from modules.operations_intelligence.repository import (
     DATABASE_PATH,
@@ -91,3 +93,31 @@ class SalesIntelligenceService:
         product_ids: Iterable[int] | None = None,
     ) -> tuple[SupplierComparisonResult, ...]:
         return self.repository.get_supplier_comparison_results(product_ids)
+
+    def get_product_trends(
+        self,
+        product_ids: Iterable[int] | None = None,
+    ) -> tuple[ProductTrend, ...]:
+        starts = self._starts()
+        return self.repository.get_product_trends(
+            start_7d=starts["7d"],
+            start_30d=starts["30d"],
+            start_90d=starts["90d"],
+            end_date=self.today,
+            product_ids=product_ids,
+        )
+
+    def get_trend_summary(
+        self,
+        product_ids: Iterable[int] | None = None,
+    ) -> TrendSummary:
+        return self.repository.summarize_trends(
+            self.get_product_trends(product_ids)
+        )
+
+    def get_trend_read_model(
+        self,
+        product_ids: Iterable[int] | None = None,
+    ) -> tuple[tuple[ProductTrend, ...], TrendSummary]:
+        trends = self.get_product_trends(product_ids)
+        return trends, self.repository.summarize_trends(trends)
