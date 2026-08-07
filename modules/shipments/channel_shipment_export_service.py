@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from openpyxl import Workbook
 
+from modules.orders.lotteon_order_parser import LotteOnOrderExcelParser
 from modules.shipments.channel_shipment_export_repository import (
     ChannelShipmentExportRepository,
 )
@@ -59,6 +60,8 @@ class ChannelShipmentExportService:
         "스마일캐시적립", "제휴사명", "배송라벨출력일", "SSG 상품번호",
         "SSG 원주문번호",
     )
+    LOTTEON_SHEET_NAME = "sheet1"
+    LOTTEON_HEADERS = LotteOnOrderExcelParser.source_headers
 
     def __init__(
         self,
@@ -246,6 +249,156 @@ class ChannelShipmentExportService:
             "exported_at": exported_at.isoformat(timespec="seconds"),
         }
 
+    def export_lotteon(
+        self,
+        *,
+        shipment_ids: Iterable[int] | None = None,
+        reexport: bool = False,
+    ) -> dict[str, Any]:
+        if reexport and shipment_ids is None:
+            raise ValueError("재출력할 송장을 선택해 주세요.")
+
+        missing_metadata_count = self.repository.count_lotteon_missing_metadata(
+            shipment_ids=shipment_ids,
+        )
+        candidates = self.repository.get_lotteon_candidates(
+            shipment_ids=shipment_ids,
+            include_exported=reexport,
+        )
+        (
+            output_rows,
+            export_rows,
+            incomplete_raw_count,
+            missing_required_count,
+            unsupported_carrier_count,
+        ) = self._build_lotteon_rows(candidates)
+
+        if not export_rows:
+            message = (
+                "선택한 송장 중 롯데ON 재출력 대상이 없습니다."
+                if reexport
+                else "새로 생성할 롯데ON 송장번호일괄등록 대상이 없습니다."
+            )
+            return {
+                "created": False,
+                "message": message,
+                "exported_count": 0,
+                "missing_metadata_count": missing_metadata_count,
+                "incomplete_raw_count": incomplete_raw_count,
+                "missing_required_count": missing_required_count,
+                "unsupported_carrier_count": unsupported_carrier_count,
+            }
+
+        output_path, exported_at = self._build_lotteon_output_path()
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        self._write_workbook(
+            output_path,
+            list(self.LOTTEON_HEADERS),
+            output_rows,
+            worksheet_name=self.LOTTEON_SHEET_NAME,
+        )
+
+        batch_id = uuid4().hex
+        self.repository.record_export(
+            rows=export_rows,
+            export_batch_id=batch_id,
+            export_file=str(output_path),
+            is_reexport=reexport,
+        )
+        return {
+            "created": True,
+            "message": f"롯데ON 송장번호일괄등록 파일 {len(export_rows):,}건을 생성했습니다.",
+            "output_file_path": str(output_path),
+            "worksheet_name": self.LOTTEON_SHEET_NAME,
+            "header_count": len(self.LOTTEON_HEADERS),
+            "exported_count": len(export_rows),
+            "missing_metadata_count": missing_metadata_count,
+            "incomplete_raw_count": incomplete_raw_count,
+            "missing_required_count": missing_required_count,
+            "unsupported_carrier_count": unsupported_carrier_count,
+            "shipment_ids": [int(row["shipment_id"]) for row in export_rows],
+            "export_batch_id": batch_id,
+            "is_reexport": reexport,
+            "exported_at": exported_at.isoformat(timespec="seconds"),
+        }
+
+    def _build_lotteon_rows(
+        self,
+        candidates: list[dict[str, Any]],
+    ) -> tuple[
+        list[dict[str, str]],
+        list[dict[str, Any]],
+        int,
+        int,
+        int,
+    ]:
+        output_rows: list[dict[str, str]] = []
+        export_rows: list[dict[str, Any]] = []
+        incomplete_raw_count = 0
+        missing_required_count = 0
+        unsupported_carrier_count = 0
+
+        for candidate in candidates:
+            try:
+                raw = json.loads(str(candidate.get("raw_source_json") or "{}"))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                incomplete_raw_count += 1
+                continue
+            if not isinstance(raw, dict) or any(
+                header not in raw for header in self.LOTTEON_HEADERS
+            ):
+                incomplete_raw_count += 1
+                continue
+
+            channel_order_number = self._text(
+                candidate.get("channel_order_number")
+            )
+            channel_item_number = self._text(
+                candidate.get("channel_item_number")
+            )
+            delivery_method = (
+                self._text(candidate.get("delivery_method"))
+                or self._text(raw.get("배송수단"))
+            )
+            courier_name = self._text(candidate.get("courier_name"))
+            tracking_number = self._text(candidate.get("tracking_number"))
+            verified_source_carrier = self._text(raw.get("배송사"))
+
+            if any(
+                not value
+                for value in (
+                    channel_order_number,
+                    channel_item_number,
+                    delivery_method,
+                    tracking_number,
+                )
+            ):
+                missing_required_count += 1
+                continue
+            if not verified_source_carrier or courier_name != verified_source_carrier:
+                unsupported_carrier_count += 1
+                continue
+
+            row = {
+                header: self._text(raw.get(header))
+                for header in self.LOTTEON_HEADERS
+            }
+            row["주문번호"] = channel_order_number
+            row["주문순번"] = channel_item_number
+            row["배송수단"] = delivery_method
+            row["배송사"] = courier_name
+            row["송장번호"] = tracking_number
+            output_rows.append(row)
+            export_rows.append(candidate)
+
+        return (
+            output_rows,
+            export_rows,
+            incomplete_raw_count,
+            missing_required_count,
+            unsupported_carrier_count,
+        )
+
     def _build_gmarket_rows(
         self,
         candidates: list[dict[str, Any]],
@@ -416,6 +569,18 @@ class ChannelShipmentExportService:
             directory = self.output_root / current.strftime("%Y%m%d")
             path = directory / (
                 "ESM_Gmarket_발송정보일괄등록_"
+                f"{current.strftime('%Y%m%d_%H%M%S')}.xlsx"
+            )
+            if not path.exists():
+                return path, current
+            current += timedelta(seconds=1)
+
+    def _build_lotteon_output_path(self) -> tuple[Path, datetime]:
+        current = self.now_provider()
+        while True:
+            directory = self.output_root / current.strftime("%Y%m%d")
+            path = directory / (
+                "롯데ON_송장번호일괄등록_"
                 f"{current.strftime('%Y%m%d_%H%M%S')}.xlsx"
             )
             if not path.exists():

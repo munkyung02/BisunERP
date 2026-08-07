@@ -15,6 +15,7 @@ class ChannelShipmentExportRepository:
     COUPANG = "쿠팡"
     SMARTSTORE = "스마트스토어"
     GMARKET = "Gmarket"
+    LOTTEON = "LotteOn"
 
     def __init__(self, database_path: str | Path = DATABASE_PATH) -> None:
         self.database_path = Path(database_path)
@@ -273,6 +274,97 @@ class ChannelShipmentExportRepository:
             "m.id IS NULL",
         ]
         parameters: list[Any] = [self.GMARKET, self.GMARKET, "배송중"]
+        self._add_shipment_id_condition(
+            conditions,
+            parameters,
+            shipment_ids,
+        )
+        if shipment_ids is not None and not parameters[3:]:
+            return 0
+
+        query = f"""
+            SELECT COUNT(*)
+            FROM shipments sh
+            INNER JOIN orders o ON o.id = sh.order_id
+            LEFT JOIN channel_order_item_metadata m
+                ON m.order_item_id = sh.order_item_id
+               AND m.platform = ?
+            WHERE {' AND '.join(conditions)}
+        """
+        with self._connect() as connection:
+            return int(connection.execute(query, parameters).fetchone()[0])
+
+    def get_lotteon_candidates(
+        self,
+        *,
+        shipment_ids: Iterable[int] | None = None,
+        include_exported: bool = False,
+    ) -> list[dict[str, Any]]:
+        conditions = [
+            "m.platform = ?",
+            "o.shipment_status = ?",
+            "TRIM(COALESCE(sh.courier_name, '')) != ''",
+            "TRIM(COALESCE(sh.tracking_number, '')) != ''",
+        ]
+        parameters: list[Any] = [self.LOTTEON, "배송중"]
+        self._add_shipment_id_condition(
+            conditions,
+            parameters,
+            shipment_ids,
+        )
+        if shipment_ids is not None and not parameters[2:]:
+            return []
+
+        if not include_exported:
+            conditions.append(
+                """
+                NOT EXISTS (
+                    SELECT 1
+                    FROM channel_shipment_export_history h
+                    WHERE h.shipment_id = sh.id
+                      AND h.platform = m.platform
+                )
+                """
+            )
+
+        query = f"""
+            SELECT
+                sh.id AS shipment_id,
+                sh.order_id,
+                sh.order_item_id,
+                sh.courier_name,
+                sh.tracking_number,
+                m.id AS metadata_id,
+                m.platform,
+                m.channel_order_number,
+                m.channel_item_number,
+                m.delivery_method,
+                m.raw_source_json
+            FROM shipments sh
+            INNER JOIN orders o ON o.id = sh.order_id
+            INNER JOIN channel_order_item_metadata m
+                ON m.order_item_id = sh.order_item_id
+            WHERE {' AND '.join(conditions)}
+            ORDER BY sh.id
+        """
+
+        with self._connect() as connection:
+            rows = connection.execute(query, parameters).fetchall()
+        return [dict(row) for row in rows]
+
+    def count_lotteon_missing_metadata(
+        self,
+        *,
+        shipment_ids: Iterable[int] | None = None,
+    ) -> int:
+        conditions = [
+            "o.platform = ?",
+            "o.shipment_status = ?",
+            "TRIM(COALESCE(sh.courier_name, '')) != ''",
+            "TRIM(COALESCE(sh.tracking_number, '')) != ''",
+            "m.id IS NULL",
+        ]
+        parameters: list[Any] = [self.LOTTEON, self.LOTTEON, "배송중"]
         self._add_shipment_id_condition(
             conditions,
             parameters,
