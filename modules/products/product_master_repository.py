@@ -7,6 +7,7 @@ from typing import Iterable
 from modules.operations_intelligence.models import (
     ProductPurchaseMetrics,
     ProductSalesMetrics,
+    SupplierComparisonResult,
     SupplierProductComparison,
 )
 from modules.operations_intelligence.service import SalesIntelligenceService
@@ -204,6 +205,16 @@ class ProductMasterRepository:
         return SalesIntelligenceService(
             self.database_path
         ).get_supplier_comparisons(product_ids)
+
+    def get_supplier_comparison(
+        self,
+        product_ids: int | Iterable[int] | None = None,
+    ) -> tuple[SupplierComparisonResult, ...]:
+        """Return the read-only supplier comparison for selected products."""
+        normalized = [product_ids] if isinstance(product_ids, int) else product_ids
+        return SalesIntelligenceService(
+            self.database_path
+        ).get_supplier_comparison(normalized)
 
     def _get_channel_visibility(
         self,

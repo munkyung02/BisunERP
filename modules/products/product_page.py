@@ -84,6 +84,7 @@ class ProductPage(QWidget):
         )
         self.current_products: list[dict[str, Any]] = []
         self.current_product_masters: dict[int, Any] = {}
+        self.current_supplier_comparisons: dict[int, Any] = {}
 
         self._create_widgets()
         self._create_layout()
@@ -368,6 +369,33 @@ class ProductPage(QWidget):
         )
         master_layout.addLayout(channel_layout)
 
+        self.supplier_comparison_table = QTableWidget(0, 8)
+        self.supplier_comparison_table.setObjectName("supplierComparisonTable")
+        self.supplier_comparison_table.setHorizontalHeaderLabels([
+            "공급처", "현재 공급가", "과거 평균 매입가", "발주수량",
+            "사용비율", "최근 발주일", "기본", "상태",
+        ])
+        self.supplier_comparison_table.setEditTriggers(
+            QAbstractItemView.EditTrigger.NoEditTriggers
+        )
+        self.supplier_comparison_table.setSelectionMode(
+            QAbstractItemView.SelectionMode.NoSelection
+        )
+        self.supplier_comparison_table.verticalHeader().setVisible(False)
+        self.supplier_comparison_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch
+        )
+        self.supplier_comparison_table.setMaximumHeight(190)
+
+        self.supplier_comparison_frame = QFrame()
+        self.supplier_comparison_frame.setObjectName("masterInfoFrame")
+        supplier_layout = QVBoxLayout(self.supplier_comparison_frame)
+        supplier_layout.setContentsMargins(16, 10, 16, 10)
+        supplier_title = QLabel("Supplier Comparison")
+        supplier_title.setObjectName("masterInfoTitle")
+        supplier_layout.addWidget(supplier_title)
+        supplier_layout.addWidget(self.supplier_comparison_table)
+
     def _create_summary_card(
         self,
         *,
@@ -594,6 +622,7 @@ class ProductPage(QWidget):
         main_layout.addWidget(
             self.master_info_frame
         )
+        main_layout.addWidget(self.supplier_comparison_frame)
 
         footer_layout = QHBoxLayout()
         footer_layout.addWidget(
@@ -786,10 +815,15 @@ class ProductPage(QWidget):
 
         self.current_products = products
         product_ids = [self._to_int(item.get("id")) for item in products]
-        channel_by_product = ProductMasterRepository(
+        master_repository = ProductMasterRepository(
             self.repository.database_path
-        ).get_channel_visibility(product_ids)
+        )
+        channel_by_product = master_repository.get_channel_visibility(product_ids)
         self.current_product_masters = channel_by_product
+        self.current_supplier_comparisons = {
+            item.product_id: item
+            for item in master_repository.get_supplier_comparison(product_ids)
+        }
 
         sorting_enabled = (
             self.product_table.isSortingEnabled()
@@ -1774,6 +1808,7 @@ class ProductPage(QWidget):
             self.master_metadata_value,
         ):
             label.setText("-")
+        self.supplier_comparison_table.setRowCount(0)
 
     def _show_master_info(self, product_id: int) -> None:
         product = next(
@@ -1812,6 +1847,7 @@ class ProductPage(QWidget):
         )
         master = self.current_product_masters.get(int(product_id))
         if master is None:
+            self._show_supplier_comparison(product_id)
             return
 
         self.master_confirmed_alias_value.setText(
@@ -1825,6 +1861,39 @@ class ProductPage(QWidget):
         )
         self.master_conflict_value.setText(master.conflict_status)
         self.master_metadata_value.setText(master.metadata_status)
+        self._show_supplier_comparison(product_id)
+
+    def _show_supplier_comparison(self, product_id: int) -> None:
+        result = self.current_supplier_comparisons.get(int(product_id))
+        rows = result.suppliers if result is not None else ()
+        self.supplier_comparison_table.setRowCount(len(rows))
+        for row_index, row in enumerate(rows):
+            configured_price = (
+                f"{row.configured_purchase_price:,}원"
+                if row.configured_purchase_price is not None else "Unavailable"
+            )
+            if row.historical_average_price is None:
+                historical_price = "Unavailable"
+            else:
+                historical_price = f"{row.historical_average_price:,}원"
+                if row.historical_price_coverage_count < row.purchase_count:
+                    historical_price += (
+                        f" ({row.historical_price_coverage_count}/{row.purchase_count})"
+                    )
+            values = (
+                row.supplier_name or row.supplier_code or "Unavailable",
+                configured_price,
+                historical_price,
+                (f"{row.purchased_quantity:,}" if row.purchased_quantity is not None else "Unavailable"),
+                (f"{row.usage_ratio:.1%}" if row.usage_ratio is not None else "Unavailable"),
+                row.latest_purchase_date[:10] or "Unavailable",
+                "Yes" if row.is_default else "No",
+                f"{row.condition_status} / {row.data_status}",
+            )
+            for column, value in enumerate(values):
+                self.supplier_comparison_table.setItem(
+                    row_index, column, QTableWidgetItem(str(value))
+                )
 
     @staticmethod
     def _format_confirmed_aliases(aliases: tuple[Any, ...]) -> str:

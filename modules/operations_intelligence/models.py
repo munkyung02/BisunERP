@@ -83,3 +83,45 @@ class SupplierProductComparison:
     price_source: str
     price_coverage_count: int
     data_status: str
+
+
+@dataclass(frozen=True)
+class SupplierComparisonRow:
+    supplier_id: int
+    supplier_name: str
+    supplier_code: str
+    configured_purchase_price: int | None
+    historical_average_price: int | None
+    historical_price_coverage_count: int
+    purchase_count: int
+    purchased_quantity: int | None
+    purchase_amount: int | None
+    usage_ratio: float | None
+    latest_purchase_date: str
+    supplier_active: bool
+    product_supplier_active: bool
+    is_default: bool
+    supplier_product_code: str
+    supplier_product_name: str
+    minimum_order_quantity: int | None
+    packaging_quantity: int | None
+    packaging_unit: str
+    shipping_fee: int | None
+    cutoff_time: str
+    condition_status: str
+    data_status: str
+
+
+@dataclass(frozen=True)
+class SupplierComparisonResult:
+    product_id: int
+    product_code: str
+    product_name: str
+    suppliers: tuple[SupplierComparisonRow, ...]
+    supplier_count: int
+    active_supplier_count: int
+    configured_default_supplier_id: int | None
+    configured_default_supplier_name: str
+    most_used_supplier_id: int | None
+    most_used_supplier_name: str
+    data_status: str

@@ -10,6 +10,8 @@ from modules.operations_intelligence.models import (
     ProductPurchaseMetrics,
     ProductSalesMetrics,
     SalesWindowSummary,
+    SupplierComparisonResult,
+    SupplierComparisonRow,
     SupplierProductComparison,
 )
 
@@ -372,6 +374,97 @@ class SalesIntelligenceRepository:
             )
         return tuple(result)
 
+    def get_supplier_comparison_results(
+        self,
+        product_ids: Iterable[int] | None = None,
+    ) -> tuple[SupplierComparisonResult, ...]:
+        normalized_ids = self._normalize_product_ids(product_ids)
+        if product_ids is not None and not normalized_ids:
+            return ()
+        with self._connect() as connection:
+            tables = self._table_names(connection)
+            products = self._fetch_products(connection, normalized_ids, product_ids)
+            purchase_columns = (
+                self._table_columns(connection, "purchase_orders")
+                if "purchase_orders" in tables else set()
+            )
+            history = self._fetch_supplier_purchase_history(
+                connection, normalized_ids, product_ids, purchase_columns
+            ) if "purchase_orders" in tables else []
+            configured = self._fetch_product_supplier_details(
+                connection, normalized_ids, product_ids
+            ) if "product_suppliers" in tables else []
+            conditions = self._fetch_supplier_conditions(
+                connection, normalized_ids, product_ids
+            ) if "supplier_product_conditions" in tables else []
+
+        history_by_key = {
+            (int(row["product_id"]), int(row["supplier_id"])): row
+            for row in history if row["supplier_id"] is not None
+        }
+        configured_by_key = {
+            (int(row["product_id"]), int(row["supplier_id"])): row
+            for row in configured
+        }
+        conditions_by_key = {
+            (int(row["product_id"]), int(row["supplier_id"])): row
+            for row in conditions
+        }
+        keys_by_product: dict[int, set[tuple[int, int]]] = {}
+        history_by_product: dict[int, list[dict[str, object]]] = {}
+        for row in history:
+            history_by_product.setdefault(int(row["product_id"]), []).append(row)
+        for key in set(history_by_key) | set(configured_by_key) | set(conditions_by_key):
+            keys_by_product.setdefault(key[0], set()).add(key)
+
+        results: list[SupplierComparisonResult] = []
+        for product in products:
+            product_id = int(product["id"])
+            product_history = history_by_product.get(product_id, [])
+            total_quantity = (
+                sum(int(row["purchased_quantity"] or 0) for row in product_history)
+                if "quantity" in purchase_columns else None
+            )
+            rows = tuple(
+                self._build_supplier_comparison_row(
+                    configured_by_key.get(key), conditions_by_key.get(key),
+                    history_by_key.get(key), total_quantity, purchase_columns,
+                )
+                for key in sorted(keys_by_product.get(product_id, set()))
+            )
+            defaults = [row for row in rows if row.is_default]
+            default_id = defaults[0].supplier_id if len(defaults) == 1 else None
+            default_name = defaults[0].supplier_name if len(defaults) == 1 else ""
+            most_id, most_name, most_ambiguous = self._most_used_supplier(product_history)
+            statuses: list[str] = []
+            if not rows:
+                statuses.append("Unavailable")
+            if len(defaults) > 1 or most_ambiguous:
+                statuses.append("Ambiguous")
+            if any(row.condition_status == "Price Conflict" for row in rows):
+                statuses.append("Conflict")
+            if rows and any(row.data_status != "Available" for row in rows):
+                statuses.append("Partial")
+            if not product_history:
+                statuses.append("No Purchase History")
+            results.append(SupplierComparisonResult(
+                product_id=product_id,
+                product_code=str(product["product_code"] or ""),
+                product_name=str(product["product_name"] or ""),
+                suppliers=rows,
+                supplier_count=len(rows),
+                active_supplier_count=sum(
+                    1 for row in rows
+                    if row.supplier_active and row.product_supplier_active
+                ),
+                configured_default_supplier_id=default_id,
+                configured_default_supplier_name=default_name,
+                most_used_supplier_id=most_id,
+                most_used_supplier_name=most_name,
+                data_status="; ".join(dict.fromkeys(statuses)) if statuses else "Available",
+            ))
+        return tuple(results)
+
     @staticmethod
     def _table_names(connection: sqlite3.Connection) -> set[str]:
         return {
@@ -386,11 +479,13 @@ class SalesIntelligenceRepository:
         connection: sqlite3.Connection,
         table: str,
     ) -> set[str]:
-        if table != "purchase_orders":
+        if table not in {
+            "purchase_orders", "product_suppliers", "supplier_product_conditions"
+        }:
             raise ValueError("Unsupported compatibility table")
         return {
             str(row[1])
-            for row in connection.execute("PRAGMA table_info(purchase_orders)")
+            for row in connection.execute(f"PRAGMA table_info({table})")
         }
 
     @staticmethod
@@ -573,6 +668,150 @@ class SalesIntelligenceRepository:
             parameters,
         ).fetchall()
         return [dict(row) for row in rows]
+
+    def _fetch_product_supplier_details(
+        self,
+        connection: sqlite3.Connection,
+        product_ids: list[int],
+        supplied: Iterable[int] | None,
+    ) -> list[dict[str, object]]:
+        columns = self._table_columns(connection, "product_suppliers")
+        if not {"product_id", "supplier_id"}.issubset(columns):
+            return []
+        extra, parameters = self._product_filter("ps.product_id", product_ids, supplied)
+
+        def value(name: str, fallback: str = "NULL") -> str:
+            return f"ps.{name}" if name in columns else fallback
+
+        rows = connection.execute(
+            f"""
+            SELECT ps.product_id, ps.supplier_id,
+                   COALESCE(s.supplier_name, '') AS supplier_name,
+                   COALESCE(s.supplier_code, '') AS supplier_code,
+                   {value('purchase_price')} AS purchase_price,
+                   COALESCE({value('supplier_product_code', "''")}, '') AS supplier_product_code,
+                   COALESCE({value('supplier_product_name', "''")}, '') AS supplier_product_name,
+                   {value('minimum_order_quantity')} AS minimum_order_quantity,
+                   {value('package_unit_qty')} AS package_unit_qty,
+                   COALESCE({value('package_unit_name', "''")}, '') AS package_unit_name,
+                   {value('shipping_fee')} AS shipping_fee,
+                   COALESCE({value('order_deadline', "''")}, '') AS order_deadline,
+                   COALESCE(s.is_active, 0) AS supplier_active,
+                   COALESCE({value('is_active', '0')}, 0) AS product_supplier_active,
+                   COALESCE({value('is_default', '0')}, 0) AS is_default
+            FROM product_suppliers AS ps
+            LEFT JOIN suppliers AS s ON s.id = ps.supplier_id
+            WHERE 1 = 1 {extra}
+            ORDER BY ps.product_id, is_default DESC, ps.supplier_id
+            """,
+            parameters,
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def _fetch_supplier_conditions(
+        self,
+        connection: sqlite3.Connection,
+        product_ids: list[int],
+        supplied: Iterable[int] | None,
+    ) -> list[dict[str, object]]:
+        columns = self._table_columns(connection, "supplier_product_conditions")
+        if not {"product_id", "supplier_id"}.issubset(columns):
+            return []
+        extra, parameters = self._product_filter("spc.product_id", product_ids, supplied)
+        price = "spc.purchase_price" if "purchase_price" in columns else "NULL"
+        rows = connection.execute(
+            f"""
+            SELECT spc.product_id, spc.supplier_id, {price} AS purchase_price,
+                   COALESCE(s.supplier_name, '') AS supplier_name,
+                   COALESCE(s.supplier_code, '') AS supplier_code,
+                   COALESCE(s.is_active, 0) AS supplier_active
+            FROM supplier_product_conditions AS spc
+            LEFT JOIN suppliers AS s ON s.id = spc.supplier_id
+            WHERE 1 = 1 {extra}
+            ORDER BY spc.product_id, spc.supplier_id
+            """,
+            parameters,
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    @staticmethod
+    def _build_supplier_comparison_row(
+        configured: dict[str, object] | None,
+        condition: dict[str, object] | None,
+        historical: dict[str, object] | None,
+        total_quantity: int | None,
+        purchase_columns: set[str],
+    ) -> SupplierComparisonRow:
+        source = configured or condition or historical or {}
+        historical = historical or {}
+        coverage = int(historical.get("price_coverage_count") or 0)
+        purchase_count = int(historical.get("purchase_count") or 0)
+        amount_value = historical.get("purchase_amount")
+        priced_quantity = int(historical.get("priced_quantity") or 0)
+        average = (
+            int(int(amount_value or 0) / priced_quantity)
+            if coverage and priced_quantity > 0 else None
+        )
+        quantity_value = historical.get("purchased_quantity")
+        quantity = (
+            int(quantity_value or 0)
+            if "quantity" in purchase_columns and historical else None
+        )
+        usage_ratio = (
+            float(quantity / total_quantity)
+            if quantity is not None and total_quantity and total_quantity > 0 else None
+        )
+        if configured and condition:
+            left, right = configured.get("purchase_price"), condition.get("purchase_price")
+            condition_status = (
+                "Consistent" if left is not None and right is not None
+                and int(left) == int(right) else
+                "Price Conflict" if left is not None and right is not None else
+                "Unavailable"
+            )
+        elif configured:
+            condition_status = "Missing in Notion Conditions"
+        elif condition:
+            condition_status = "Missing in Product Suppliers"
+        else:
+            condition_status = "Unavailable"
+        statuses: list[str] = []
+        if not historical:
+            statuses.append("No Purchase History")
+        if historical and coverage == 0:
+            statuses.append("Historical Price Unavailable")
+        elif historical and coverage < purchase_count:
+            statuses.append("Historical Price Partial")
+        if configured is None:
+            statuses.append("Configuration Unavailable")
+        return SupplierComparisonRow(
+            supplier_id=int(source.get("supplier_id") or 0),
+            supplier_name=str(source.get("supplier_name") or ""),
+            supplier_code=str(source.get("supplier_code") or ""),
+            configured_purchase_price=(
+                int(configured["purchase_price"])
+                if configured and configured.get("purchase_price") is not None else None
+            ),
+            historical_average_price=average,
+            historical_price_coverage_count=coverage,
+            purchase_count=purchase_count,
+            purchased_quantity=quantity,
+            purchase_amount=(int(amount_value) if coverage and amount_value is not None else None),
+            usage_ratio=usage_ratio,
+            latest_purchase_date=str(historical.get("latest_purchase_date") or ""),
+            supplier_active=bool(int(source.get("supplier_active") or 0)),
+            product_supplier_active=bool(int(configured.get("product_supplier_active") or 0)) if configured else False,
+            is_default=bool(int(configured.get("is_default") or 0)) if configured else False,
+            supplier_product_code=str(configured.get("supplier_product_code") or "") if configured else "",
+            supplier_product_name=str(configured.get("supplier_product_name") or "") if configured else "",
+            minimum_order_quantity=(int(configured["minimum_order_quantity"]) if configured and configured.get("minimum_order_quantity") is not None else None),
+            packaging_quantity=(int(configured["package_unit_qty"]) if configured and configured.get("package_unit_qty") is not None else None),
+            packaging_unit=str(configured.get("package_unit_name") or "") if configured else "",
+            shipping_fee=(int(configured["shipping_fee"]) if configured and configured.get("shipping_fee") is not None else None),
+            cutoff_time=str(configured.get("order_deadline") or "") if configured else "",
+            condition_status=condition_status,
+            data_status="; ".join(statuses) if statuses else "Available",
+        )
 
     def _build_product_purchase_metric(
         self,

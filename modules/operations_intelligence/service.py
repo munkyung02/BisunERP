@@ -10,6 +10,7 @@ from modules.operations_intelligence.models import (
     ProductPurchaseMetrics,
     ProductSalesMetrics,
     SalesWindowSummary,
+    SupplierComparisonResult,
     SupplierProductComparison,
 )
 from modules.operations_intelligence.repository import (
@@ -84,3 +85,9 @@ class SalesIntelligenceService:
         product_ids: Iterable[int] | None = None,
     ) -> tuple[SupplierProductComparison, ...]:
         return self.repository.get_supplier_product_comparisons(product_ids)
+
+    def get_supplier_comparison(
+        self,
+        product_ids: Iterable[int] | None = None,
+    ) -> tuple[SupplierComparisonResult, ...]:
+        return self.repository.get_supplier_comparison_results(product_ids)
