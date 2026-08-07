@@ -4,6 +4,7 @@ from modules.oms_adapters.legacy_excel_adapter import LegacyExcelOrderAdapter
 from modules.oms_adapters.registry import OMSAdapterRegistry
 from modules.orders.coupang_order_parser import CoupangOrderExcelParser
 from modules.orders.esm_order_parser import ESMOrderExcelParser
+from modules.orders.lotteon_order_parser import LotteOnOrderExcelParser
 from modules.orders.smartstore_order_parser import SmartStoreOrderExcelParser
 
 
@@ -35,6 +36,15 @@ def create_default_adapter_registry() -> OMSAdapterRegistry:
             display_name="ESM Plus 주문 Excel",
             version="1.0",
             priority=300,
+        )
+    )
+    registry.register(
+        LegacyExcelOrderAdapter(
+            LotteOnOrderExcelParser(),
+            adapter_id="lotteon.excel.orders",
+            display_name="롯데ON 배송관리 Excel",
+            version="1.0",
+            priority=400,
         )
     )
     return registry
