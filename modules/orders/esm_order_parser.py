@@ -8,7 +8,7 @@ from modules.orders.base_order_parser import BaseOrderExcelParser
 
 
 class ESMOrderExcelParser(BaseOrderExcelParser):
-    """ESM Plus 발송관리 엑셀의 확인된 Gmarket 주문을 변환합니다."""
+    """ESM Plus 발송관리 엑셀의 확인된 채널 주문을 변환합니다."""
 
     platform_name = "ESM"
     normalized_platform = "Gmarket"
@@ -37,11 +37,17 @@ class ESMOrderExcelParser(BaseOrderExcelParser):
         if working.empty:
             raise ValueError("ESM Plus 발송관리 엑셀에서 주문번호를 찾지 못했습니다.")
 
-        self._validate_sales_accounts(working)
+        working["_esm_platform"] = [
+            self._classify_sales_account(
+                self.clean_text(row.get("판매아이디")),
+                row_index=int(row_index),
+            )
+            for row_index, row in working.iterrows()
+        ]
 
         orders: list[dict[str, Any]] = []
-        for order_number, group in working.groupby(
-            "주문번호",
+        for (platform, order_number), group in working.groupby(
+            ["_esm_platform", "주문번호"],
             sort=False,
             dropna=False,
         ):
@@ -76,7 +82,7 @@ class ESMOrderExcelParser(BaseOrderExcelParser):
                         "purchase_round": "",
                         "mapping_status": "미매핑",
                         "channel_metadata": {
-                            "platform": self.normalized_platform,
+                            "platform": str(platform),
                             "original_platform_name": sales_account,
                             "channel_order_number": self.clean_identifier(
                                 row.get("주문번호")
@@ -105,6 +111,7 @@ class ESMOrderExcelParser(BaseOrderExcelParser):
                             "raw_source_row": {
                                 str(column): self.clean_text(value)
                                 for column, value in row.to_dict().items()
+                                if column != "_esm_platform"
                             },
                             "source_file": source_file,
                         },
@@ -126,7 +133,7 @@ class ESMOrderExcelParser(BaseOrderExcelParser):
             )
             orders.append(
                 {
-                    "platform": self.normalized_platform,
+                    "platform": str(platform),
                     "order_number": str(order_number),
                     "ordered_at": ordered_at,
                     "receiver_name": self.clean_text(first_row.get("수령인명")),
@@ -152,16 +159,17 @@ class ESMOrderExcelParser(BaseOrderExcelParser):
             raise ValueError("ESM Plus 발송관리 엑셀에서 등록 가능한 주문을 찾지 못했습니다.")
         return orders
 
-    def _validate_sales_accounts(self, dataframe: pd.DataFrame) -> None:
-        for row_index, row in dataframe.iterrows():
-            sales_account = self.clean_text(row.get("판매아이디"))
-            if self._is_gmarket_account(sales_account):
-                continue
-            display_value = sales_account or "(비어 있음)"
-            raise ValueError(
-                f"ESM 주문서 {int(row_index) + 2}행의 판매아이디를 지원하지 않습니다: "
-                f"{display_value}. 현재는 확인된 Gmarket(지마켓) 주문만 지원합니다."
-            )
+    def _classify_sales_account(self, value: str, *, row_index: int) -> str:
+        if self._is_gmarket_account(value):
+            return "Gmarket"
+        if self._is_auction_account(value):
+            return "Auction"
+        display_value = value or "(비어 있음)"
+        raise ValueError(
+            f"ESM 주문서 {row_index + 2}행의 판매아이디를 지원하지 않습니다: "
+            f"{display_value}. 현재는 확인된 Gmarket(지마켓) 및 Auction(옥션) "
+            "주문만 지원합니다."
+        )
 
     @staticmethod
     def _is_gmarket_account(value: str) -> bool:
@@ -170,3 +178,8 @@ class ESMOrderExcelParser(BaseOrderExcelParser):
             marker in normalized
             for marker in ("지마켓", "gmarket", "g마켓")
         )
+
+    @staticmethod
+    def _is_auction_account(value: str) -> bool:
+        normalized = "".join(str(value or "").casefold().split())
+        return "옥션" in normalized
