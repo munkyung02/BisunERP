@@ -137,6 +137,85 @@ class ProductRepository:
             """, (int(product_id),)).fetchall()
         return [dict(row) for row in rows]
 
+    def search_active_products(
+        self,
+        keyword: str,
+        *,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Wizard용 활성 ERP 상품 검색 결과를 한 번의 집계 쿼리로 반환합니다."""
+        search_keyword = f"%{str(keyword or '').strip()}%"
+        safe_limit = max(1, min(int(limit), 50))
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                WITH supplier_summary AS (
+                    SELECT
+                        ps.product_id,
+                        COUNT(CASE WHEN ps.is_active = 1 THEN 1 END) AS active_supplier_count,
+                        MAX(CASE WHEN ps.is_default = 1 AND ps.is_active = 1
+                                 THEN s.supplier_name END) AS default_supplier
+                    FROM product_suppliers AS ps
+                    INNER JOIN suppliers AS s ON s.id = ps.supplier_id
+                    GROUP BY ps.product_id
+                ),
+                mapping_summary AS (
+                    SELECT product_id, COUNT(*) AS mapping_count
+                    FROM product_mapping_rules
+                    WHERE is_active = 1
+                    GROUP BY product_id
+                ),
+                usage_summary AS (
+                    SELECT
+                        oi.product_id,
+                        COUNT(*) AS mapped_order_item_count,
+                        MAX(o.ordered_at) AS latest_order_date
+                    FROM order_items AS oi
+                    INNER JOIN orders AS o ON o.id = oi.order_id
+                    WHERE oi.product_id IS NOT NULL
+                    GROUP BY oi.product_id
+                )
+                SELECT
+                    p.id,
+                    COALESCE(p.product_code, '') AS product_code,
+                    p.product_name,
+                    COALESCE(p.option_name, '') AS option_name,
+                    COALESCE(ss.default_supplier, s.supplier_name, '') AS default_supplier,
+                    COALESCE(ss.active_supplier_count, 0) AS active_supplier_count,
+                    COALESCE(ms.mapping_count, 0) AS mapping_count,
+                    COALESCE(us.mapped_order_item_count, 0) AS mapped_order_item_count,
+                    COALESCE(us.latest_order_date, '') AS latest_order_date
+                FROM products AS p
+                LEFT JOIN suppliers AS s ON s.id = p.supplier_id
+                LEFT JOIN supplier_summary AS ss ON ss.product_id = p.id
+                LEFT JOIN mapping_summary AS ms ON ms.product_id = p.id
+                LEFT JOIN usage_summary AS us ON us.product_id = p.id
+                WHERE p.is_active = 1
+                  AND (
+                      COALESCE(p.product_code, '') LIKE ?
+                      OR p.product_name LIKE ?
+                      OR COALESCE(p.option_name, '') LIKE ?
+                      OR EXISTS (
+                          SELECT 1
+                          FROM product_suppliers AS ps_search
+                          WHERE ps_search.product_id = p.id
+                            AND ps_search.is_active = 1
+                            AND COALESCE(ps_search.supplier_product_name, '') LIKE ?
+                      )
+                  )
+                ORDER BY p.product_name, p.option_name, p.id
+                LIMIT ?
+                """,
+                (
+                    search_keyword,
+                    search_keyword,
+                    search_keyword,
+                    search_keyword,
+                    safe_limit,
+                ),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def add_product_supplier(self, product_id: int, supplier_id: int, *, supplier_product_name: str | None = None, supplier_product_code: str | None = None, purchase_price: int = 0, minimum_order_quantity: int = 1, package_unit_qty: int = 1, package_unit_name: str = "개", shipping_fee: int = 0, carrier: str | None = None, order_deadline: str = "14:00") -> int:
         deadline = str(order_deadline or "14:00").strip()
         try:

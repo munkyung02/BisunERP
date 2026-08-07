@@ -105,7 +105,12 @@ class OrderRepository:
     def _rule_text(value: Any) -> str:
         return str(value or "").strip()
 
-    def save_mapping_rule_for_item(self, order_item_id: int, product_id: int) -> int:
+    def save_mapping_rule_for_item(
+        self,
+        order_item_id: int,
+        product_id: int,
+        supplier_id: int | None = None,
+    ) -> int:
         """선택 주문상품의 판매처명·상품명·옵션 조합을 영구 규칙으로 저장합니다."""
         with self._connect() as connection:
             row = connection.execute(
@@ -124,7 +129,71 @@ class OrderRepository:
                 (self._rule_text(row['platform']), self._rule_text(row['platform_product_name']),
                  self._rule_text(row['option_name']), int(product_id))
             )
-            connection.commit()
+            if supplier_id is None:
+                connection.commit()
+            else:
+                selected_supplier_id = self._validate_id(
+                    supplier_id,
+                    "공급처 ID",
+                )
+                linked = connection.execute(
+                    """
+                    SELECT p.purchase_round
+                    FROM products AS p
+                    INNER JOIN product_suppliers AS ps
+                        ON ps.product_id = p.id
+                       AND ps.supplier_id = ?
+                       AND ps.is_active = 1
+                    INNER JOIN suppliers AS s
+                        ON s.id = ps.supplier_id
+                       AND s.is_active = 1
+                    WHERE p.id = ? AND p.is_active = 1
+                    """,
+                    (selected_supplier_id, int(product_id)),
+                ).fetchone()
+                if linked is None:
+                    raise ValueError("선택한 ERP 상품과 공급처의 활성 연결을 찾을 수 없습니다.")
+
+                targets = connection.execute(
+                    """
+                    SELECT oi.id, oi.order_id
+                    FROM order_items AS oi
+                    INNER JOIN orders AS o ON o.id = oi.order_id
+                    WHERE COALESCE(o.platform, '') = ?
+                      AND TRIM(COALESCE(oi.platform_product_name, '')) = ?
+                      AND TRIM(COALESCE(oi.option_name, '')) = ?
+                      AND (oi.product_id IS NULL OR oi.mapping_status = '미매핑')
+                      AND COALESCE(oi.mapping_status, '') NOT IN (
+                          '수동매핑', '추천확정', '신규상품매핑'
+                      )
+                    """,
+                    (
+                        self._rule_text(row["platform"]),
+                        self._rule_text(row["platform_product_name"]),
+                        self._rule_text(row["option_name"]),
+                    ),
+                ).fetchall()
+                affected_order_ids: set[int] = set()
+                for target in targets:
+                    connection.execute(
+                        """
+                        UPDATE order_items
+                        SET product_id = ?, supplier_id = ?, purchase_round = ?,
+                            mapping_status = '자동매핑', updated_at = CURRENT_TIMESTAMP
+                        WHERE id = ?
+                        """,
+                        (
+                            int(product_id),
+                            selected_supplier_id,
+                            linked["purchase_round"],
+                            int(target["id"]),
+                        ),
+                    )
+                    affected_order_ids.add(int(target["order_id"]))
+                for affected_order_id in affected_order_ids:
+                    self._refresh_order_mapping_status(connection, affected_order_id)
+                connection.commit()
+                return len(targets)
         return self.apply_saved_rule()
 
     def get_unmapped_product_groups(self) -> list[dict[str, Any]]:
