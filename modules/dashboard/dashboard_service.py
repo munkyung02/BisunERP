@@ -4,6 +4,7 @@ from collections import defaultdict
 from datetime import date, datetime, timedelta
 from typing import Any, Callable
 
+from modules.operations_intelligence.service import SalesIntelligenceService
 from modules.orders.order_repository import OrderRepository
 from modules.purchases.purchase_repository import PurchaseRepository
 from modules.shipments.shipment_repository import ShipmentRepository
@@ -18,10 +19,14 @@ class DashboardService:
         order_repository: OrderRepository | None = None,
         purchase_repository: PurchaseRepository | None = None,
         shipment_repository: ShipmentRepository | None = None,
+        sales_intelligence_service: SalesIntelligenceService | None = None,
     ) -> None:
         self.order_repository = order_repository or OrderRepository()
         self.purchase_repository = purchase_repository or PurchaseRepository()
         self.shipment_repository = shipment_repository or ShipmentRepository()
+        self.sales_intelligence_service = (
+            sales_intelligence_service or SalesIntelligenceService()
+        )
         self.settlement_service = SettlementService()
 
     def get_dashboard_data(self) -> dict[str, Any]:
@@ -100,6 +105,12 @@ class DashboardService:
         profit_summary = self._safe_call(
             self.settlement_service.get_dashboard_profit, {}, "정산 집계", errors
         )
+        sales_intelligence = self._safe_call(
+            self.sales_intelligence_service.get_dashboard_read_model,
+            {"windows": {}, "channel_mix_30d": []},
+            "Sales Intelligence",
+            errors,
+        )
 
         seven_days = self._build_seven_day_stats(all_orders)
         yesterday = seven_days[-2] if len(seven_days) >= 2 else {"order_count": 0, "sales": 0}
@@ -148,6 +159,7 @@ class DashboardService:
                 for row in supplier_summary
             ],
             "seven_day_stats": seven_days,
+            "sales_intelligence": sales_intelligence,
             "errors": errors,
             "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }

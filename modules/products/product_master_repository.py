@@ -4,6 +4,8 @@ import sqlite3
 from pathlib import Path
 from typing import Iterable
 
+from modules.operations_intelligence.models import ProductSalesMetrics
+from modules.operations_intelligence.service import SalesIntelligenceService
 from modules.products.product_master_models import (
     ChannelVisibilitySummary,
     ConfirmedChannelAlias,
@@ -171,6 +173,15 @@ class ProductMasterRepository:
             return {}
         with self._connect() as connection:
             return self._get_channel_visibility(connection, normalized_ids)
+
+    def get_sales_metrics(
+        self,
+        product_ids: Iterable[int] | None = None,
+    ) -> tuple[ProductSalesMetrics, ...]:
+        """Expose 30/90-day product sales without changing ProductMaster."""
+        return SalesIntelligenceService(self.database_path).get_product_metrics(
+            product_ids
+        )
 
     def _get_channel_visibility(
         self,
