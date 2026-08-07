@@ -443,6 +443,10 @@ class DashboardPage(ttk.Frame):
             notebook,
             padding=10,
         )
+        sales_intelligence_tab = ttk.Frame(notebook, padding=10)
+        trend_tab = ttk.Frame(notebook, padding=10)
+        channel_tab = ttk.Frame(notebook, padding=10)
+        purchase_intelligence_tab = ttk.Frame(notebook, padding=10)
 
         notebook.add(
             orders_tab,
@@ -457,9 +461,18 @@ class DashboardPage(ttk.Frame):
             text="공급처 발주",
         )
 
+        notebook.add(sales_intelligence_tab, text="판매 인텔리전스")
+        notebook.add(trend_tab, text="상품 추세")
+        notebook.add(channel_tab, text="채널 구성")
+        notebook.add(purchase_intelligence_tab, text="구매·공급처 진단")
+
         self._build_orders(orders_tab)
         self._build_stats(stats_tab)
         self._build_suppliers(supplier_tab)
+        self._build_sales_intelligence(sales_intelligence_tab)
+        self._build_trends(trend_tab)
+        self._build_channel_mix(channel_tab)
+        self._build_purchase_intelligence(purchase_intelligence_tab)
 
     # =========================================================
     # 최근 주문
@@ -674,6 +687,87 @@ class DashboardPage(ttk.Frame):
     # 데이터 새로고침
     # =========================================================
 
+    def _build_sales_intelligence(self, parent: ttk.Frame) -> None:
+        parent.columnconfigure(0, weight=1)
+        parent.rowconfigure(1, weight=1)
+        self.sales_overview_var = tk.StringVar(value="Unavailable")
+        overview = ttk.LabelFrame(parent, text="Sales Overview", padding=8)
+        overview.grid(row=0, column=0, pady=(0, 8), sticky="ew")
+        ttk.Label(overview, textvariable=self.sales_overview_var).pack(
+            anchor="w", fill="x"
+        )
+        columns = ("product", "quantity", "revenue", "orders", "latest")
+        self.top_product_tree = ttk.Treeview(
+            parent, columns=columns, show="headings", style="Dash.Treeview"
+        )
+        for column, heading, width in (
+            ("product", "상품", 260), ("quantity", "30일 판매수량", 110),
+            ("revenue", "30일 매출", 120), ("orders", "주문건수", 90),
+            ("latest", "최근 주문일", 130),
+        ):
+            self.top_product_tree.heading(column, text=heading)
+            self.top_product_tree.column(
+                column, width=width, anchor="w" if column == "product" else "e"
+            )
+        self.top_product_tree.grid(row=1, column=0, sticky="nsew")
+        self.unmapped_quantity_var = tk.StringVar(value="미매핑 수량: Unavailable")
+        ttk.Label(parent, textvariable=self.unmapped_quantity_var).grid(
+            row=2, column=0, pady=(6, 0), sticky="w"
+        )
+
+    def _build_trends(self, parent: ttk.Frame) -> None:
+        parent.columnconfigure(0, weight=1)
+        parent.rowconfigure(1, weight=1)
+        self.trend_summary_var = tk.StringVar(value="Unavailable")
+        ttk.Label(parent, textvariable=self.trend_summary_var).grid(
+            row=0, column=0, pady=(0, 8), sticky="w"
+        )
+        columns = ("product", "status", "quantity", "latest", "data")
+        self.trend_tree = ttk.Treeview(
+            parent, columns=columns, show="headings", style="Dash.Treeview"
+        )
+        for column, heading, width in (
+            ("product", "상품", 260), ("status", "추세", 120),
+            ("quantity", "30일 판매수량", 110), ("latest", "최근 주문일", 130),
+            ("data", "데이터 상태", 160),
+        ):
+            self.trend_tree.heading(column, text=heading)
+            self.trend_tree.column(column, width=width, anchor="w")
+        self.trend_tree.grid(row=1, column=0, sticky="nsew")
+
+    def _build_channel_mix(self, parent: ttk.Frame) -> None:
+        parent.columnconfigure(0, weight=1)
+        parent.rowconfigure(0, weight=1)
+        columns = ("platform", "orders", "quantity", "revenue", "ratio")
+        self.channel_mix_tree = ttk.Treeview(
+            parent, columns=columns, show="headings", style="Dash.Treeview"
+        )
+        for column, heading, width in (
+            ("platform", "플랫폼", 180), ("orders", "주문건수", 100),
+            ("quantity", "수량", 100), ("revenue", "매출", 140),
+            ("ratio", "매출 비율", 100),
+        ):
+            self.channel_mix_tree.heading(column, text=heading)
+            self.channel_mix_tree.column(
+                column, width=width, anchor="w" if column == "platform" else "e"
+            )
+        self.channel_mix_tree.grid(row=0, column=0, sticky="nsew")
+        self.channel_status_var = tk.StringVar(value="")
+        ttk.Label(parent, textvariable=self.channel_status_var).grid(
+            row=1, column=0, pady=(6, 0), sticky="w"
+        )
+
+    def _build_purchase_intelligence(self, parent: ttk.Frame) -> None:
+        parent.columnconfigure(0, weight=1)
+        self.purchase_intelligence_var = tk.StringVar(value="Unavailable")
+        self.supplier_health_var = tk.StringVar(value="Unavailable")
+        purchase = ttk.LabelFrame(parent, text="Purchase Intelligence", padding=12)
+        purchase.grid(row=0, column=0, pady=(0, 10), sticky="ew")
+        ttk.Label(purchase, textvariable=self.purchase_intelligence_var).pack(anchor="w")
+        supplier = ttk.LabelFrame(parent, text="Supplier Health / Conflict", padding=12)
+        supplier.grid(row=1, column=0, sticky="ew")
+        ttk.Label(supplier, textvariable=self.supplier_health_var).pack(anchor="w")
+
     def refresh_dashboard(self) -> None:
         self.refresh_button.configure(
             state="disabled"
@@ -838,6 +932,109 @@ class DashboardPage(ttk.Frame):
             )
         )
         self._redraw_chart()
+        self._apply_intelligence(data.get("operations_intelligence", {}))
+
+    def _apply_intelligence(self, data: dict[str, Any]) -> None:
+        sales = data.get("sales_overview", {})
+        if sales.get("status") == "Unavailable":
+            self.sales_overview_var.set("Unavailable")
+        else:
+            self.sales_overview_var.set(
+                "오늘 매출 {today_revenue} · 오늘 수량 {today_quantity} · "
+                "7일 매출 {revenue_7d} · 30일 매출 {revenue_30d} · "
+                "30일 AOV {aov_30d} · 매핑 {mapped}/{unmapped}".format(
+                    today_revenue=self._display_number(sales.get("today_revenue"), "원"),
+                    today_quantity=self._display_number(sales.get("today_quantity"), "개"),
+                    revenue_7d=self._display_number(sales.get("revenue_7d"), "원"),
+                    revenue_30d=self._display_number(sales.get("revenue_30d"), "원"),
+                    aov_30d=self._display_number(sales.get("aov_30d"), "원"),
+                    mapped=self._display_number(sales.get("mapped_quantity"), "개"),
+                    unmapped=self._display_number(sales.get("unmapped_quantity"), "개"),
+                )
+            )
+
+        top = data.get("top_products", {})
+        self._clear_tree(self.top_product_tree)
+        for row in top.get("rows", []) if top.get("status") != "Unavailable" else []:
+            self.top_product_tree.insert("", "end", values=(
+                row.get("product_name") or "Unavailable",
+                self._display_number(row.get("quantity_30d")),
+                self._display_number(row.get("revenue_30d"), "원"),
+                self._display_number(row.get("order_count")),
+                str(row.get("latest_order_date") or "Unavailable")[:10],
+            ))
+        unmapped = top.get("unmapped_quantity")
+        self.unmapped_quantity_var.set(
+            "미매핑 수량: " + self._display_number(unmapped, "개")
+        )
+
+        trends = data.get("trends", {})
+        summary = trends.get("summary", {})
+        if trends.get("status") == "Unavailable":
+            self.trend_summary_var.set("Unavailable")
+        else:
+            self.trend_summary_var.set(" · ".join(
+                f"{name} {self._display_number(summary.get(name))}"
+                for name in (
+                    "Increasing", "Decreasing", "Stable", "New",
+                    "Inactive", "Insufficient History",
+                )
+            ))
+        self._clear_tree(self.trend_tree)
+        for row in trends.get("rows", []) if trends.get("status") != "Unavailable" else []:
+            self.trend_tree.insert("", "end", values=(
+                row.get("product_name") or "Unavailable",
+                row.get("trend_status") or "Unavailable",
+                self._display_number(row.get("quantity_30d")),
+                str(row.get("latest_order_date") or "Unavailable")[:10],
+                row.get("data_status") or "Unavailable",
+            ))
+
+        channel = data.get("channel_mix", {})
+        self._clear_tree(self.channel_mix_tree)
+        if channel.get("status") == "Unavailable":
+            self.channel_status_var.set("Unavailable")
+        else:
+            self.channel_status_var.set("")
+            for row in channel.get("rows", []):
+                ratio = row.get("revenue_ratio")
+                self.channel_mix_tree.insert("", "end", values=(
+                    row.get("platform") or "Unavailable",
+                    self._display_number(row.get("order_count")),
+                    self._display_number(row.get("quantity")),
+                    self._display_number(row.get("revenue"), "원"),
+                    f"{float(ratio):.1%}" if ratio is not None else "Unavailable",
+                ))
+
+        purchase = data.get("purchase", {})
+        if purchase.get("status") == "Unavailable":
+            self.purchase_intelligence_var.set("Unavailable")
+        else:
+            self.purchase_intelligence_var.set(
+                "상태 {status} · 발주이력 상품 {products} · 가격 커버리지 {covered}/{total} · "
+                "가격 누락 상품 {missing} · 기본/최다 공급처 불일치 {mismatch}".format(
+                    status=purchase.get("status") or "Unavailable",
+                    products=self._display_number(purchase.get("products_with_history")),
+                    covered=self._display_number(purchase.get("price_coverage_count")),
+                    total=self._display_number(purchase.get("total_purchase_rows")),
+                    missing=self._display_number(purchase.get("missing_price_products")),
+                    mismatch=self._display_number(purchase.get("default_mismatch_count")),
+                )
+            )
+
+        supplier = data.get("supplier_health", {})
+        if supplier.get("status") == "Unavailable":
+            self.supplier_health_var.set("Unavailable")
+        else:
+            self.supplier_health_var.set(
+                "Price Conflict {conflict} · Missing in Product Suppliers {product} · "
+                "Missing in Notion Conditions {notion} · Ambiguous {ambiguous}".format(
+                    conflict=self._display_number(supplier.get("price_conflict")),
+                    product=self._display_number(supplier.get("missing_product_suppliers")),
+                    notion=self._display_number(supplier.get("missing_notion_conditions")),
+                    ambiguous=self._display_number(supplier.get("ambiguous_usage")),
+                )
+            )
 
     # =========================================================
     # 표 데이터 채우기
@@ -1025,6 +1222,15 @@ class DashboardPage(ttk.Frame):
             tree.delete(
                 *children
             )
+
+    @staticmethod
+    def _display_number(value: Any, unit: str = "") -> str:
+        if value is None:
+            return "Unavailable"
+        try:
+            return f"{int(value):,}{unit}"
+        except (TypeError, ValueError):
+            return "Unavailable"
 
     @staticmethod
     def _to_int(
