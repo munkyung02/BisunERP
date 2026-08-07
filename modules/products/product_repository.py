@@ -2,6 +2,8 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from modules.products.product_master_repository import ProductMasterRepository
+
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 DATABASE_PATH = PROJECT_ROOT / "data" / "bisun_erp.db"
@@ -303,33 +305,17 @@ class ProductRepository:
                 p.sale_price,
                 p.purchase_round,
                 p.is_active,
+                p.category,
+                p.origin,
+                p.packaging_type,
+                p.sale_unit,
                 p.notion_page_id,
                 p.notion_last_edited_time,
                 p.notion_last_sync,
                 p.sync_status,
                 p.sync_message,
                 p.created_at,
-                p.updated_at,
-
-                (
-                    SELECT COUNT(*)
-                    FROM product_suppliers AS ps
-                    WHERE ps.product_id = p.id
-                      AND ps.is_active = 1
-                ) AS supplier_count,
-
-                (
-                    SELECT COUNT(*)
-                    FROM product_mapping_rules AS pmr
-                    WHERE pmr.product_id = p.id
-                      AND pmr.is_active = 1
-                ) AS mapping_rule_count,
-
-                (
-                    SELECT COUNT(*)
-                    FROM order_items AS oi
-                    WHERE oi.product_id = p.id
-                ) AS mapped_order_item_count
+                p.updated_at
 
             FROM products AS p
 
@@ -349,15 +335,52 @@ class ProductRepository:
                 parameters,
             ).fetchall()
 
-        result: list[dict[str, Any]] = []
+        result = [dict(row) for row in rows]
+        masters = ProductMasterRepository(
+            self.database_path
+        ).get_product_masters(
+            [int(item["id"]) for item in result]
+        )
+        masters_by_id = {master.id: master for master in masters}
 
-        for row in rows:
-            item = dict(row)
-            item["mapping_count"] = (
-                int(item.get("mapping_rule_count") or 0)
-                + int(item.get("mapped_order_item_count") or 0)
-            )
-            result.append(item)
+        for item in result:
+            master = masters_by_id.get(int(item["id"]))
+            if master is None:
+                item.update({
+                    "supplier_count": 0,
+                    "active_supplier_count": 0,
+                    "default_supplier": "",
+                    "mapping_rule_count": 0,
+                    "new_product_mapping_count": 0,
+                    "total_mapping_rule_count": 0,
+                    "mapped_order_item_count": 0,
+                    "purchase_history_count": 0,
+                    "shipment_history_count": 0,
+                    "latest_order_date": "",
+                    "master_status": (
+                        "사용" if int(item.get("is_active") or 0) else "중지"
+                    ),
+                    "mapping_count": 0,
+                })
+                continue
+
+            item.update({
+                "supplier_count": master.supplier.supplier_count,
+                "active_supplier_count": master.supplier.active_supplier_count,
+                "default_supplier": master.supplier.default_supplier,
+                "mapping_rule_count": master.mapping.confirmed_mapping_rules,
+                "new_product_mapping_count": master.mapping.new_product_mappings,
+                "total_mapping_rule_count": master.mapping.total_mapping_rules,
+                "mapped_order_item_count": master.usage.mapped_order_items,
+                "purchase_history_count": master.usage.purchase_history_count,
+                "shipment_history_count": master.usage.shipment_history_count,
+                "latest_order_date": master.usage.latest_order_date,
+                "master_status": master.status,
+                "mapping_count": (
+                    master.mapping.confirmed_mapping_rules
+                    + master.usage.mapped_order_items
+                ),
+            })
 
         return result
 

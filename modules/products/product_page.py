@@ -317,6 +317,36 @@ class ProductPage(QWidget):
             "selectionInfo"
         )
 
+        self.master_info_frame = QFrame()
+        self.master_info_frame.setObjectName("masterInfoFrame")
+        master_layout = QVBoxLayout(self.master_info_frame)
+        master_layout.setContentsMargins(16, 10, 16, 10)
+        master_layout.setSpacing(6)
+
+        master_title = QLabel("Product Master 현황")
+        master_title.setObjectName("masterInfoTitle")
+        master_layout.addWidget(master_title)
+
+        metrics_layout = QHBoxLayout()
+        metrics_layout.setSpacing(24)
+        self.master_supplier_value = self._add_master_metric(
+            metrics_layout, "공급처 수"
+        )
+        self.master_mapping_value = self._add_master_metric(
+            metrics_layout, "매핑 수"
+        )
+        self.master_order_item_value = self._add_master_metric(
+            metrics_layout, "매핑 주문상품"
+        )
+        self.master_latest_order_value = self._add_master_metric(
+            metrics_layout, "최근 주문일"
+        )
+        self.master_status_value = self._add_master_metric(
+            metrics_layout, "상태"
+        )
+        metrics_layout.addStretch()
+        master_layout.addLayout(metrics_layout)
+
     def _create_summary_card(
         self,
         *,
@@ -351,6 +381,25 @@ class ProductPage(QWidget):
         layout.addStretch()
 
         return card
+
+    @staticmethod
+    def _add_master_metric(
+        layout: QHBoxLayout,
+        title: str,
+    ) -> QLabel:
+        metric = QFrame()
+        metric_layout = QVBoxLayout(metric)
+        metric_layout.setContentsMargins(0, 0, 0, 0)
+        metric_layout.setSpacing(2)
+
+        title_label = QLabel(title)
+        title_label.setObjectName("masterMetricTitle")
+        value_label = QLabel("-")
+        value_label.setObjectName("masterMetricValue")
+        metric_layout.addWidget(title_label)
+        metric_layout.addWidget(value_label)
+        layout.addWidget(metric)
+        return value_label
 
     # =========================================================
     # 레이아웃
@@ -499,6 +548,10 @@ class ProductPage(QWidget):
         main_layout.addWidget(
             table_frame,
             1,
+        )
+
+        main_layout.addWidget(
+            self.master_info_frame
         )
 
         footer_layout = QHBoxLayout()
@@ -1640,6 +1693,7 @@ class ProductPage(QWidget):
             self.selection_info_label.setText(
                 "수정할 상품을 선택하세요."
             )
+            self._clear_master_info()
             return
 
         product_name = (
@@ -1649,6 +1703,7 @@ class ProductPage(QWidget):
         self.selection_info_label.setText(
             f"선택 상품: {product_name}"
         )
+        self._show_master_info(product_id)
 
         if current_active:
             self.toggle_active_button.setText(
@@ -1658,6 +1713,52 @@ class ProductPage(QWidget):
             self.toggle_active_button.setText(
                 "다시 사용"
             )
+
+    def _clear_master_info(self) -> None:
+        for label in (
+            self.master_supplier_value,
+            self.master_mapping_value,
+            self.master_order_item_value,
+            self.master_latest_order_value,
+            self.master_status_value,
+        ):
+            label.setText("-")
+
+    def _show_master_info(self, product_id: int) -> None:
+        product = next(
+            (
+                item
+                for item in self.current_products
+                if self._to_int(item.get("id")) == int(product_id)
+            ),
+            None,
+        )
+        if product is None:
+            self._clear_master_info()
+            return
+
+        supplier_count = self._to_int(product.get("supplier_count"))
+        active_supplier_count = self._to_int(
+            product.get("active_supplier_count")
+        )
+        self.master_supplier_value.setText(
+            f"{supplier_count:,}곳 (활성 {active_supplier_count:,})"
+        )
+        self.master_mapping_value.setText(
+            f"{self._to_int(product.get('total_mapping_rule_count')):,}건"
+        )
+        self.master_order_item_value.setText(
+            f"{self._to_int(product.get('mapped_order_item_count')):,}건"
+        )
+        latest_order_date = self._display_text(
+            product.get("latest_order_date")
+        )
+        self.master_latest_order_value.setText(
+            latest_order_date[:10] if latest_order_date else "-"
+        )
+        self.master_status_value.setText(
+            self._display_text(product.get("master_status")) or "-"
+        )
 
     def _get_selected_row(
         self,
@@ -1994,6 +2095,30 @@ class ProductPage(QWidget):
                 background-color: #FFFFFF;
                 border: 1px solid #E3E8EF;
                 border-radius: 10px;
+            }
+
+            QFrame#masterInfoFrame {
+                background-color: #FFFFFF;
+                border: 1px solid #E3E8EF;
+                border-radius: 10px;
+            }
+
+            QLabel#masterInfoTitle {
+                color: #27344A;
+                font-weight: 700;
+                background-color: transparent;
+            }
+
+            QLabel#masterMetricTitle {
+                color: #687386;
+                font-size: 11px;
+                background-color: transparent;
+            }
+
+            QLabel#masterMetricValue {
+                color: #1F2937;
+                font-weight: 700;
+                background-color: transparent;
             }
 
             QLineEdit#searchInput {
