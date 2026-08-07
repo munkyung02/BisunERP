@@ -127,6 +127,36 @@ class OrderRepository:
             connection.commit()
         return self.apply_saved_rule()
 
+    def get_unmapped_product_groups(self) -> list[dict[str, Any]]:
+        """미매핑 주문상품을 판매처 상품명과 옵션 단위로 묶어 반환합니다."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT
+                    MIN(oi.id) AS representative_item_id,
+                    COALESCE(o.platform, '') AS platform,
+                    TRIM(COALESCE(oi.platform_product_name, '')) AS platform_product_name,
+                    TRIM(COALESCE(oi.option_name, '')) AS option_name,
+                    COUNT(DISTINCT oi.order_id) AS order_count,
+                    SUM(COALESCE(oi.quantity, 0)) AS total_quantity,
+                    MIN(o.ordered_at) AS first_ordered_at,
+                    MAX(o.ordered_at) AS latest_ordered_at
+                FROM order_items AS oi
+                INNER JOIN orders AS o ON o.id = oi.order_id
+                WHERE (oi.product_id IS NULL OR oi.mapping_status = '미매핑')
+                  AND COALESCE(oi.mapping_status, '') NOT IN (
+                      '수동매핑', '추천확정', '신규상품매핑'
+                  )
+                  AND TRIM(COALESCE(oi.platform_product_name, '')) != ''
+                GROUP BY
+                    COALESCE(o.platform, ''),
+                    TRIM(COALESCE(oi.platform_product_name, '')),
+                    TRIM(COALESCE(oi.option_name, ''))
+                ORDER BY MIN(o.ordered_at), MIN(oi.id)
+                """
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def apply_saved_rule(
         self,
         order_item_id: int | None = None,

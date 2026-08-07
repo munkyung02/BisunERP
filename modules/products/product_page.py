@@ -28,6 +28,7 @@ from modules.products.product_dialog import ProductDialog
 from modules.products.product_master_repository import ProductMasterRepository
 from modules.products.product_supplier_dialog import ProductSupplierDialog
 from modules.products.product_repository import ProductRepository
+from modules.products.product_master_wizard import ProductMasterWizard
 from modules.notion_sync.product_notion_sync_service import NotionProductSyncService
 
 
@@ -320,6 +321,12 @@ class ProductPage(QWidget):
             "selectionInfo"
         )
 
+        self.unmapped_wizard_button = QPushButton("미매핑 상품 등록")
+        self.unmapped_wizard_button.setObjectName("primaryButton")
+        self.unmapped_wizard_button.setToolTip(
+            "미매핑 주문상품을 ERP 상품·공급처·확정 매핑 규칙으로 연속 등록합니다."
+        )
+
         self.master_info_frame = QFrame()
         self.master_info_frame.setObjectName("masterInfoFrame")
         master_layout = QVBoxLayout(self.master_info_frame)
@@ -558,6 +565,7 @@ class ProductPage(QWidget):
         button_layout.addWidget(
             self.quick_create_button
         )
+        button_layout.addWidget(self.unmapped_wizard_button)
         button_layout.addWidget(
             self.edit_button
         )
@@ -740,6 +748,10 @@ class ProductPage(QWidget):
 
         self.quick_create_button.clicked.connect(
             self.open_quick_create_dialog
+        )
+
+        self.unmapped_wizard_button.clicked.connect(
+            self.open_product_master_wizard
         )
 
         self.edit_button.clicked.connect(
@@ -1210,6 +1222,14 @@ class ProductPage(QWidget):
         dialog = ProductDialog(
             parent=self,
             continuous_mode=True,
+        )
+        dialog.exec()
+        self.refresh_products()
+
+    def open_product_master_wizard(self) -> None:
+        dialog = ProductMasterWizard(
+            parent=self,
+            database_path=self.repository.database_path,
         )
         dialog.exec()
         self.refresh_products()

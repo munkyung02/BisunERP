@@ -624,9 +624,13 @@ class ProductRepository:
         self,
         *,
         product_name: str,
+        product_code: str | None = None,
         platform: str | None = None,
         platform_product_name: str | None = None,
         option_name: str | None = None,
+        category: str | None = None,
+        sale_unit: str | None = None,
+        origin: str | None = None,
         supplier_id: int | None = None,
         supplier_product_name: str | None = None,
         purchase_price: int = 0,
@@ -648,9 +652,30 @@ class ProductRepository:
             raise ValueError("판매가는 0원 이상이어야 합니다.")
 
         with self._connect() as connection:
-            product_code = self._generate_product_code(
-                connection
-            )
+            cleaned_product_code = self._clean_text(product_code)
+            if cleaned_product_code:
+                duplicate = connection.execute(
+                    "SELECT id FROM products WHERE TRIM(product_code) = TRIM(?)",
+                    (cleaned_product_code,),
+                ).fetchone()
+                if duplicate is not None:
+                    raise ValueError("이미 사용 중인 상품코드입니다.")
+            else:
+                cleaned_product_code = self._generate_product_code(connection)
+
+            duplicate = connection.execute(
+                """
+                SELECT id
+                FROM products
+                WHERE LOWER(TRIM(product_name)) = LOWER(TRIM(?))
+                  AND LOWER(TRIM(COALESCE(option_name, ''))) =
+                      LOWER(TRIM(COALESCE(?, '')))
+                LIMIT 1
+                """,
+                (cleaned_product_name, self._clean_text(option_name)),
+            ).fetchone()
+            if duplicate is not None:
+                raise ValueError("같은 상품명과 옵션의 ERP 상품이 이미 존재합니다.")
 
             cursor = connection.execute(
                 """
@@ -660,6 +685,9 @@ class ProductRepository:
                     platform_product_name,
                     product_name,
                     option_name,
+                    category,
+                    sale_unit,
+                    origin,
                     supplier_id,
                     supplier_product_name,
                     purchase_price,
@@ -670,17 +698,20 @@ class ProductRepository:
                     updated_at
                 )
                 VALUES (
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                     CURRENT_TIMESTAMP,
                     CURRENT_TIMESTAMP
                 )
                 """,
                 (
-                    product_code,
+                    cleaned_product_code,
                     self._clean_text(platform),
                     self._clean_text(platform_product_name),
                     cleaned_product_name,
                     self._clean_text(option_name),
+                    self._clean_text(category),
+                    self._clean_text(sale_unit),
+                    self._clean_text(origin),
                     supplier_id,
                     self._clean_text(supplier_product_name),
                     int(purchase_price),
