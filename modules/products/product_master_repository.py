@@ -4,7 +4,11 @@ import sqlite3
 from pathlib import Path
 from typing import Iterable
 
-from modules.operations_intelligence.models import ProductSalesMetrics
+from modules.operations_intelligence.models import (
+    ProductPurchaseMetrics,
+    ProductSalesMetrics,
+    SupplierProductComparison,
+)
 from modules.operations_intelligence.service import SalesIntelligenceService
 from modules.products.product_master_models import (
     ChannelVisibilitySummary,
@@ -182,6 +186,24 @@ class ProductMasterRepository:
         return SalesIntelligenceService(self.database_path).get_product_metrics(
             product_ids
         )
+
+    def get_purchase_metrics(
+        self,
+        product_ids: Iterable[int] | None = None,
+    ) -> tuple[ProductPurchaseMetrics, ...]:
+        """Expose actual purchase history without changing ProductMaster."""
+        return SalesIntelligenceService(self.database_path).get_purchase_metrics(
+            product_ids
+        )
+
+    def get_supplier_comparisons(
+        self,
+        product_ids: Iterable[int] | None = None,
+    ) -> tuple[SupplierProductComparison, ...]:
+        """Expose configured suppliers beside read-only purchase history."""
+        return SalesIntelligenceService(
+            self.database_path
+        ).get_supplier_comparisons(product_ids)
 
     def _get_channel_visibility(
         self,

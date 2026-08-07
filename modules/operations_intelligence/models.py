@@ -42,3 +42,44 @@ class ChannelSalesMix:
     order_ratio: float
     quantity_ratio: float
     revenue_ratio: float
+
+
+@dataclass(frozen=True)
+class ProductPurchaseMetrics:
+    product_id: int
+    product_code: str
+    product_name: str
+    purchase_count: int
+    purchased_quantity: int | None
+    total_purchase_amount: int | None
+    average_unit_price: int | None
+    price_coverage_count: int
+    total_purchase_rows: int
+    configured_default_supplier_id: int | None
+    configured_default_supplier_name: str
+    most_used_supplier_id: int | None
+    most_used_supplier_name: str
+    latest_supplier_id: int | None
+    latest_supplier_name: str
+    latest_purchase_date: str
+    data_status: str
+
+
+@dataclass(frozen=True)
+class SupplierProductComparison:
+    product_id: int
+    supplier_id: int
+    supplier_name: str
+    configured_purchase_price: int
+    historical_average_price: int | None
+    purchase_count: int
+    purchased_quantity: int | None
+    purchase_amount: int | None
+    usage_ratio: float
+    latest_purchase_date: str
+    supplier_active: bool
+    product_supplier_active: bool
+    is_default: bool
+    price_source: str
+    price_coverage_count: int
+    data_status: str

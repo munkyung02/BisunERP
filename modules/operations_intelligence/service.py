@@ -7,8 +7,10 @@ from typing import Iterable
 
 from modules.operations_intelligence.models import (
     ChannelSalesMix,
+    ProductPurchaseMetrics,
     ProductSalesMetrics,
     SalesWindowSummary,
+    SupplierProductComparison,
 )
 from modules.operations_intelligence.repository import (
     DATABASE_PATH,
@@ -67,3 +69,18 @@ class SalesIntelligenceService:
             "windows": {key: asdict(value) for key, value in summaries.items()},
             "channel_mix_30d": [asdict(item) for item in self.get_channel_mix("30d")],
         }
+
+    def get_purchase_schema_capabilities(self) -> dict[str, bool]:
+        return self.repository.get_purchase_schema_capabilities()
+
+    def get_purchase_metrics(
+        self,
+        product_ids: Iterable[int] | None = None,
+    ) -> tuple[ProductPurchaseMetrics, ...]:
+        return self.repository.get_product_purchase_metrics(product_ids)
+
+    def get_supplier_comparisons(
+        self,
+        product_ids: Iterable[int] | None = None,
+    ) -> tuple[SupplierProductComparison, ...]:
+        return self.repository.get_supplier_product_comparisons(product_ids)
