@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 )
 
 from modules.products.product_dialog import ProductDialog
+from modules.products.product_master_repository import ProductMasterRepository
 from modules.products.product_supplier_dialog import ProductSupplierDialog
 from modules.products.product_repository import ProductRepository
 from modules.notion_sync.product_notion_sync_service import NotionProductSyncService
@@ -82,6 +83,7 @@ class ProductPage(QWidget):
             product_repository=self.repository,
         )
         self.current_products: list[dict[str, Any]] = []
+        self.current_product_masters: dict[int, Any] = {}
 
         self._create_widgets()
         self._create_layout()
@@ -347,6 +349,25 @@ class ProductPage(QWidget):
         metrics_layout.addStretch()
         master_layout.addLayout(metrics_layout)
 
+        channel_layout = QVBoxLayout()
+        channel_layout.setSpacing(3)
+        self.master_confirmed_alias_value = self._add_master_detail(
+            channel_layout, "Confirmed Aliases"
+        )
+        self.master_observed_alias_value = self._add_master_detail(
+            channel_layout, "Observed Aliases"
+        )
+        self.master_identifier_value = self._add_master_detail(
+            channel_layout, "Observed Identifiers"
+        )
+        self.master_conflict_value = self._add_master_detail(
+            channel_layout, "Conflict Status"
+        )
+        self.master_metadata_value = self._add_master_detail(
+            channel_layout, "Metadata Status"
+        )
+        master_layout.addLayout(channel_layout)
+
     def _create_summary_card(
         self,
         *,
@@ -399,6 +420,26 @@ class ProductPage(QWidget):
         metric_layout.addWidget(title_label)
         metric_layout.addWidget(value_label)
         layout.addWidget(metric)
+        return value_label
+
+    @staticmethod
+    def _add_master_detail(
+        layout: QVBoxLayout,
+        title: str,
+    ) -> QLabel:
+        row = QHBoxLayout()
+        title_label = QLabel(f"{title}:")
+        title_label.setObjectName("masterMetricTitle")
+        title_label.setMinimumWidth(145)
+        value_label = QLabel("-")
+        value_label.setObjectName("masterDetailValue")
+        value_label.setWordWrap(True)
+        value_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        row.addWidget(title_label)
+        row.addWidget(value_label, 1)
+        layout.addLayout(row)
         return value_label
 
     # =========================================================
@@ -744,6 +785,11 @@ class ProductPage(QWidget):
             self._set_loading_state(False)
 
         self.current_products = products
+        product_ids = [self._to_int(item.get("id")) for item in products]
+        channel_by_product = ProductMasterRepository(
+            self.repository.database_path
+        ).get_channel_visibility(product_ids)
+        self.current_product_masters = channel_by_product
 
         sorting_enabled = (
             self.product_table.isSortingEnabled()
@@ -1721,6 +1767,11 @@ class ProductPage(QWidget):
             self.master_order_item_value,
             self.master_latest_order_value,
             self.master_status_value,
+            self.master_confirmed_alias_value,
+            self.master_observed_alias_value,
+            self.master_identifier_value,
+            self.master_conflict_value,
+            self.master_metadata_value,
         ):
             label.setText("-")
 
@@ -1758,6 +1809,58 @@ class ProductPage(QWidget):
         )
         self.master_status_value.setText(
             self._display_text(product.get("master_status")) or "-"
+        )
+        master = self.current_product_masters.get(int(product_id))
+        if master is None:
+            return
+
+        self.master_confirmed_alias_value.setText(
+            self._format_confirmed_aliases(master.confirmed_aliases)
+        )
+        self.master_observed_alias_value.setText(
+            self._format_observed_aliases(master.observed_aliases)
+        )
+        self.master_identifier_value.setText(
+            self._format_identifiers(master.observed_identifiers)
+        )
+        self.master_conflict_value.setText(master.conflict_status)
+        self.master_metadata_value.setText(master.metadata_status)
+
+    @staticmethod
+    def _format_confirmed_aliases(aliases: tuple[Any, ...]) -> str:
+        if not aliases:
+            return "Unavailable"
+        return " | ".join(
+            f"{item.platform}: {item.platform_product_name}"
+            + (f" / {item.option_name}" if item.option_name else "")
+            + ("" if item.is_active else " (inactive)")
+            for item in aliases
+        )
+
+    @staticmethod
+    def _format_observed_aliases(aliases: tuple[Any, ...]) -> str:
+        if not aliases:
+            return "Unavailable"
+        return " | ".join(
+            f"{item.platform}: {item.platform_product_name}"
+            + (f" / {item.option_name}" if item.option_name else "")
+            + f" ({item.observed_count:,})"
+            + (
+                f" [{item.first_seen[:10]} ~ {item.latest_seen[:10]}]"
+                if item.first_seen or item.latest_seen
+                else ""
+            )
+            for item in aliases
+        )
+
+    @staticmethod
+    def _format_identifiers(identifiers: tuple[Any, ...]) -> str:
+        if not identifiers:
+            return "Unavailable"
+        return " | ".join(
+            f"{item.platform} {item.identifier_type}={item.value}"
+            + (" [Conflict]" if item.is_conflict else "")
+            for item in identifiers
         )
 
     def _get_selected_row(

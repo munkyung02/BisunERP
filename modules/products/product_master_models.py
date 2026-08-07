@@ -26,6 +26,42 @@ class UsageSummary:
 
 
 @dataclass(frozen=True)
+class ConfirmedChannelAlias:
+    platform: str
+    platform_product_name: str
+    option_name: str
+    is_active: bool
+
+
+@dataclass(frozen=True)
+class ObservedChannelAlias:
+    platform: str
+    platform_product_name: str
+    option_name: str
+    first_seen: str
+    latest_seen: str
+    observed_count: int
+
+
+@dataclass(frozen=True)
+class ObservedChannelIdentifier:
+    platform: str
+    identifier_type: str
+    value: str
+    observed_count: int
+    is_conflict: bool
+
+
+@dataclass(frozen=True)
+class ChannelVisibilitySummary:
+    confirmed_aliases: tuple[ConfirmedChannelAlias, ...]
+    observed_aliases: tuple[ObservedChannelAlias, ...]
+    observed_identifiers: tuple[ObservedChannelIdentifier, ...]
+    conflict_status: str
+    metadata_status: str
+
+
+@dataclass(frozen=True)
 class ProductMaster:
     id: int
     product_code: str
@@ -40,3 +76,4 @@ class ProductMaster:
     supplier: SupplierSummary
     mapping: MappingSummary
     usage: UsageSummary
+    channel: ChannelVisibilitySummary
