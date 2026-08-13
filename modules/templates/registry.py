@@ -6,11 +6,13 @@ from pathlib import Path
 from .base import PurchaseTemplate
 from .default_template import DefaultPurchaseTemplate
 from .summary_only_template import SummaryOnlyPurchaseTemplate
+from .haedam_template import HaedamPurchaseTemplate
 
 
 TEMPLATE_CLASSES: dict[str, type[PurchaseTemplate]] = {
     DefaultPurchaseTemplate.template_key: DefaultPurchaseTemplate,
     SummaryOnlyPurchaseTemplate.template_key: SummaryOnlyPurchaseTemplate,
+    HaedamPurchaseTemplate.template_key: HaedamPurchaseTemplate,
 }
 
 CONFIG_PATH = Path(__file__).with_name(
