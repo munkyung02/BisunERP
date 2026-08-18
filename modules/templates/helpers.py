@@ -12,6 +12,21 @@ def safe_filename(value: Any) -> str:
     return text or "미지정"
 
 
+def get_unique_output_path(file_path: Path) -> Path:
+    """기존 파일을 덮어쓰지 않는 사용 가능한 출력 경로를 반환합니다."""
+    if not file_path.exists():
+        return file_path
+
+    sequence = 2
+    while True:
+        candidate = file_path.with_name(
+            f"{file_path.stem}_{sequence}{file_path.suffix}"
+        )
+        if not candidate.exists():
+            return candidate
+        sequence += 1
+
+
 def full_address(address: Any, detail_address: Any) -> str:
     return " ".join(
         str(value).strip()

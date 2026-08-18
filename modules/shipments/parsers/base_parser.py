@@ -14,6 +14,24 @@ class BaseShipmentParser(ABC):
     parser_key = "base"
     display_name = "기본 파서"
     supplier_name: str | None = None
+    CARRIER_ALIASES = {
+        "cj대한통운": "CJ대한통운",
+        "대한통운": "CJ대한통운",
+        "CJ": "CJ대한통운",
+        "CJ택배": "CJ대한통운",
+        "CJ대한통운": "CJ대한통운",
+        "로젠": "로젠택배",
+        "로젠택배": "로젠택배",
+        "한진": "한진택배",
+        "한진택배": "한진택배",
+        "롯데": "롯데택배",
+        "롯데택배": "롯데택배",
+        "롯데글로벌로지스": "롯데택배",
+        "우체국": "우체국택배",
+        "우체국택배": "우체국택배",
+        "경동": "경동택배",
+        "경동택배": "경동택배",
+    }
 
     @abstractmethod
     def detect(self, file_path: str | Path) -> bool:
@@ -77,24 +95,12 @@ class BaseShipmentParser(ABC):
         original = cls.clean_text(value)
         carrier = original.replace(" ", "")
 
-        aliases = {
-            "대한통운": "CJ대한통운",
-            "CJ": "CJ대한통운",
-            "CJ택배": "CJ대한통운",
-            "CJ대한통운": "CJ대한통운",
-            "로젠": "로젠택배",
-            "로젠택배": "로젠택배",
-            "한진": "한진택배",
-            "한진택배": "한진택배",
-            "롯데": "롯데택배",
-            "롯데택배": "롯데택배",
-            "롯데글로벌로지스": "롯데택배",
-            "우체국": "우체국택배",
-            "우체국택배": "우체국택배",
-            "경동": "경동택배",
-            "경동택배": "경동택배",
-        }
-        return aliases.get(carrier, original)
+        return cls.CARRIER_ALIASES.get(carrier, original)
+
+    @classmethod
+    def standard_carriers(cls) -> tuple[str, ...]:
+        """현재 표준화 로직이 반환하는 택배사 목록입니다."""
+        return tuple(dict.fromkeys(cls.CARRIER_ALIASES.values()))
 
     @classmethod
     def clean_tracking_number(cls, value: Any) -> str:

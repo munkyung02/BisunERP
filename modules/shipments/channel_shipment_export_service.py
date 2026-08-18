@@ -9,6 +9,7 @@ from uuid import uuid4
 from openpyxl import Workbook
 
 from modules.orders.lotteon_order_parser import LotteOnOrderExcelParser
+from modules.orders.toss_order_parser import TossOrderExcelParser
 from modules.shipments.channel_shipment_export_repository import (
     ChannelShipmentExportRepository,
 )
@@ -64,6 +65,31 @@ class ChannelShipmentExportService:
     ESM_AUCTION_SHEET_NAME = ESM_GMARKET_SHEET_NAME
     LOTTEON_SHEET_NAME = "sheet1"
     LOTTEON_HEADERS = LotteOnOrderExcelParser.source_headers
+    TOSS_SHEET_NAME = "주문내역"
+    TOSS_HEADERS = TossOrderExcelParser.source_headers
+    TOSS_HELPER_VALUES = TossOrderExcelParser.helper_values
+    TOSS_GUIDE_LEFT = (
+        "📍 다운로드 받은 파일로 '엑셀 일괄발송' 처리하는 방법\n\n"
+        "1. 엑셀 파일에서 아래 네 가지 항목을 입력해주세요. "
+        "(일괄발송 처리 시 아래 4개 열이 반드시 포함되어 있어야 합니다.)\n"
+        "주문상품번호 / 주문상태 / 택배사 / 송장번호\n\n"
+        "2. 주문상태를 '배송중' 상태로 변경해주세요.\n"
+        "발송 처리할 데이터가 있는 행 이름을 '배송중' 으로 저장해주세요.\n\n"
+        "3. 토스쇼핑파트너스에 파일을 업로드해주세요.\n"
+        "배송중 페이지에서 '엑셀 업로드' 버튼을 클릭한 후, 작성한 파일을 "
+        "업로드하면 발송 처리가 진행됩니다."
+    )
+    TOSS_GUIDE_RIGHT = (
+        "📍 입력 및 수정 가능 항목\n\n"
+        "1. 노란색 셀(주문상태, 택배사, 송장번호)은 직접 입력하거나 수정할 수 있어요.\n\n"
+        "2. 주문상태 변경 가능 범위\n"
+        "주문상태는 결제완료 / 상품준비중 / 배송중 상태로만 변경할 수 있습니다.\n"
+        "※ 배송완료 및 발송지연 상태는 엑셀로 변경할 수 없습니다.\n"
+        "※ 발송지연 처리가 필요한 경우 토쇼파에서 직접 처리해 주세요.\n\n"
+        "3. 송장번호가 바뀐경우 수정 방법\n"
+        "배송중 상태에서 송장번호가 바뀐 경우, 기존 송장번호를 변경된 "
+        "송장번호로 수정한 뒤 배송중 탭에 다시 업로드해 주세요."
+    )
 
     def __init__(
         self,
@@ -394,6 +420,114 @@ class ChannelShipmentExportService:
             "exported_at": exported_at.isoformat(timespec="seconds"),
         }
 
+    def export_toss(
+        self,
+        *,
+        shipment_ids: Iterable[int] | None = None,
+        reexport: bool = False,
+    ) -> dict[str, Any]:
+        if reexport and shipment_ids is None:
+            raise ValueError("재출력할 송장을 선택해 주세요.")
+
+        missing_metadata_count = self.repository.count_toss_missing_metadata(
+            shipment_ids=shipment_ids,
+        )
+        candidates = self.repository.get_toss_candidates(
+            shipment_ids=shipment_ids,
+            include_exported=reexport,
+        )
+        output_rows, export_rows, incomplete_raw_count = self._build_toss_rows(
+            candidates
+        )
+        if not export_rows:
+            message = (
+                "선택한 송장 중 Toss 재출력 대상이 없습니다."
+                if reexport
+                else "새로 생성할 Toss 발송처리 대상이 없습니다."
+            )
+            return {
+                "created": False,
+                "message": message,
+                "exported_count": 0,
+                "missing_metadata_count": missing_metadata_count,
+                "incomplete_raw_count": incomplete_raw_count,
+            }
+
+        output_path, exported_at = self._build_toss_output_path()
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        self._write_toss_workbook(output_path, output_rows)
+
+        batch_id = uuid4().hex
+        self.repository.record_export(
+            rows=export_rows,
+            export_batch_id=batch_id,
+            export_file=str(output_path),
+            is_reexport=reexport,
+        )
+        return {
+            "created": True,
+            "message": f"Toss 발송처리 파일 {len(export_rows):,}건을 생성했습니다.",
+            "output_file_path": str(output_path),
+            "worksheet_name": self.TOSS_SHEET_NAME,
+            "header_count": len(self.TOSS_HEADERS),
+            "exported_count": len(export_rows),
+            "missing_metadata_count": missing_metadata_count,
+            "incomplete_raw_count": incomplete_raw_count,
+            "shipment_ids": [int(row["shipment_id"]) for row in export_rows],
+            "export_batch_id": batch_id,
+            "is_reexport": reexport,
+            "exported_at": exported_at.isoformat(timespec="seconds"),
+        }
+
+    def _build_toss_rows(
+        self,
+        candidates: list[dict[str, Any]],
+    ) -> tuple[list[dict[str, str]], list[dict[str, Any]], int]:
+        output_rows: list[dict[str, str]] = []
+        export_rows: list[dict[str, Any]] = []
+        incomplete_raw_count = 0
+        for candidate in candidates:
+            try:
+                raw = json.loads(str(candidate.get("raw_source_json") or "{}"))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                incomplete_raw_count += 1
+                continue
+            if not isinstance(raw, dict) or any(
+                header not in raw for header in self.TOSS_HEADERS
+            ):
+                incomplete_raw_count += 1
+                continue
+            row = {header: self._text(raw.get(header)) for header in self.TOSS_HEADERS}
+            row["주문상태"] = "배송중"
+            row["택배사"] = self._text(candidate.get("courier_name"))
+            row["송장번호"] = self._text(candidate.get("tracking_number"))
+            output_rows.append(row)
+            export_rows.append(candidate)
+        return output_rows, export_rows, incomplete_raw_count
+
+    def _write_toss_workbook(
+        self,
+        path: Path,
+        rows: list[dict[str, str]],
+    ) -> None:
+        workbook = Workbook()
+        worksheet = workbook.active
+        worksheet.title = self.TOSS_SHEET_NAME
+        worksheet.merge_cells("A1:F1")
+        worksheet.merge_cells("G1:AE1")
+        worksheet["A1"] = self.TOSS_GUIDE_LEFT
+        worksheet["G1"] = self.TOSS_GUIDE_RIGHT
+        for column, header in enumerate(self.TOSS_HEADERS, start=1):
+            worksheet.cell(row=2, column=column, value=header)
+            worksheet.cell(row=3, column=column, value=self.TOSS_HELPER_VALUES[column - 1])
+        for row_number, row in enumerate(rows, start=4):
+            for column, header in enumerate(self.TOSS_HEADERS, start=1):
+                cell = worksheet.cell(row=row_number, column=column, value=row[header])
+                if header == "송장번호":
+                    cell.number_format = "@"
+        workbook.save(path)
+        workbook.close()
+
     def _build_lotteon_rows(
         self,
         candidates: list[dict[str, Any]],
@@ -667,6 +801,15 @@ class ChannelShipmentExportService:
                 "롯데ON_송장번호일괄등록_"
                 f"{current.strftime('%Y%m%d_%H%M%S')}.xlsx"
             )
+            if not path.exists():
+                return path, current
+            current += timedelta(seconds=1)
+
+    def _build_toss_output_path(self) -> tuple[Path, datetime]:
+        current = self.now_provider()
+        while True:
+            directory = self.output_root / current.strftime("%Y%m%d")
+            path = directory / f"토스_발송처리_{current.strftime('%Y%m%d_%H%M%S')}.xlsx"
             if not path.exists():
                 return path, current
             current += timedelta(seconds=1)

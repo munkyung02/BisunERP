@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ctypes
 import subprocess
 import sys
 import tkinter as tk
@@ -34,6 +35,9 @@ from modules.shipments.shipment_page import ShipmentPage
 from modules.work_center.work_center_page import WorkCenterPage
 
 
+WINDOWS_APP_USER_MODEL_ID = "BisunERP.v2.8"
+
+
 class MainWindow:
     """
     비선상회 ERP v1.0 메인 화면입니다.
@@ -43,12 +47,15 @@ class MainWindow:
     """
 
     def __init__(self) -> None:
+        self.project_root = Path(__file__).resolve().parent.parent
+        self._set_windows_app_user_model_id()
+
         self.root = tk.Tk()
         self.root.title(f"{ERP_NAME} {get_display_version()}")
         self.root.geometry("1500x900")
         self.root.minsize(1180, 720)
+        self._set_window_icon()
 
-        self.project_root = Path(__file__).resolve().parent.parent
         self.status_var = tk.StringVar(value="시스템 준비 완료")
         self.global_search_var = tk.StringVar()
 
@@ -80,6 +87,34 @@ class MainWindow:
         self._run_startup_backup()
         self._start_notion_auto_sync()
         self._start_coupang_order_scheduler()
+
+    @staticmethod
+    def _set_windows_app_user_model_id() -> bool:
+        if sys.platform != "win32":
+            return False
+
+        try:
+            setter = (
+                ctypes.windll.shell32
+                .SetCurrentProcessExplicitAppUserModelID
+            )
+            setter.argtypes = (ctypes.c_wchar_p,)
+            setter.restype = ctypes.c_long
+            result = setter(WINDOWS_APP_USER_MODEL_ID)
+            return result == 0
+        except (AttributeError, OSError):
+            return False
+
+    def _set_window_icon(self) -> bool:
+        icon_path = self.project_root / "assets" / "bisun_erp.ico"
+        if not icon_path.is_file():
+            return False
+
+        try:
+            self.root.iconbitmap(str(icon_path))
+            return True
+        except (OSError, tk.TclError):
+            return False
 
     def _configure_style(self) -> None:
         style = ttk.Style()
@@ -233,7 +268,7 @@ class MainWindow:
         support_menus = [
             ("시스템 진단", self.show_qa_automation),
             ("일괄등록", self.show_data_import),
-            ("구매통계", self.show_purchase_dashboard),
+            ("판매·손익 통계", self.show_purchase_dashboard),
             ("실무점검", self.show_operations_check),
             ("데이터점검", self.show_integrity),
             ("백업 및 복원", self.show_backup),
@@ -482,7 +517,7 @@ class MainWindow:
 
         self.purchase_dashboard_page.tkraise()
         self.purchase_dashboard_page.refresh()
-        self.status_var.set("구매통계 화면")
+        self.status_var.set("판매·손익 통계 화면")
 
     def show_data_import(self) -> None:
         if self.data_import_page is None:
@@ -553,6 +588,7 @@ class MainWindow:
             "송장관리": self.open_shipments,
             "일괄등록": self.show_data_import,
             "구매통계": self.show_purchase_dashboard,
+            "판매·손익 통계": self.show_purchase_dashboard,
             "데이터점검": self.show_integrity,
             "백업 및 복원": self.show_backup,
             "환경설정": self.show_settings,

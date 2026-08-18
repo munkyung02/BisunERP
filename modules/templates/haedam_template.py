@@ -8,7 +8,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
 from .base import PurchaseTemplate
-from .helpers import full_address, safe_filename
+from .helpers import full_address, get_unique_output_path, safe_filename
 
 
 class HaedamPurchaseTemplate(PurchaseTemplate):
@@ -87,7 +87,7 @@ class HaedamPurchaseTemplate(PurchaseTemplate):
             sheet.column_dimensions[get_column_letter(col_index)].width = width
 
         # fixed sender values
-        sender_name = "더유"
+        sender_name = "비선상회"
         sender_phone = "010-2431-0204"
 
         # write data rows starting at row 2
@@ -133,9 +133,9 @@ class HaedamPurchaseTemplate(PurchaseTemplate):
                     cell.alignment = Alignment(vertical="center")
             row += 1
 
-        timestamp = datetime.now().strftime("%H%M%S")
-        file_path = output_directory / (
-            f"{safe_filename(supplier_name)}_{safe_filename(purchase_round)}_해담_출고요청서_{timestamp}.xlsx"
+        created_date = datetime.now().strftime("%Y%m%d")
+        file_path = get_unique_output_path(
+            output_directory / f"{created_date}_상품출고요청서_더유_해담.xlsx"
         )
 
         workbook.save(file_path)

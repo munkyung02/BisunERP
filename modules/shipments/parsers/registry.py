@@ -3,12 +3,14 @@ from __future__ import annotations
 from pathlib import Path
 
 from .base_parser import BaseShipmentParser
+from .foodpresident_parser import FoodPresidentShipmentParser
 from .haedam_parser import HaedamShipmentParser
 from .oehyeon_parser import OehyeonShipmentParser
 from .standard_parser import StandardShipmentParser
 
 
 PARSER_CLASSES: list[type[BaseShipmentParser]] = [
+    FoodPresidentShipmentParser,
     StandardShipmentParser,
     HaedamShipmentParser,
     OehyeonShipmentParser,

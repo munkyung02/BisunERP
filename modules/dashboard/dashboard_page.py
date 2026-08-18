@@ -14,7 +14,7 @@ class DashboardPage(ttk.Frame):
     CARDS = (
         ("today_orders", "오늘 주문", "건"),
         ("today_sales", "오늘 매출", "원"),
-        ("average_order", "오늘 객단가", "원"),
+        ("today_purchase", "오늘 매입", "원"),
         ("total_orders", "전체 주문", "건"),
         ("unmapped", "미매핑", "건"),
         ("purchase_waiting", "발주 대기", "건"),

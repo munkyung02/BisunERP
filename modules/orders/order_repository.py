@@ -453,15 +453,42 @@ class OrderRepository:
 
         if mapping_status:
             conditions.append(
-                "o.mapping_status = ?"
+                """
+                o.mapping_status = ?
+                AND EXISTS (
+                    SELECT 1
+                    FROM order_items AS active_mapping_item
+                    WHERE active_mapping_item.order_id = o.id
+                      AND COALESCE(active_mapping_item.cancellation_status, '정상') = '정상'
+                )
+                """
             )
             parameters.append(
                 mapping_status.strip()
             )
 
-        if purchase_status:
+        if purchase_status in {
+            "미발주취소", "발주후취소요청", "발주후취소완료"
+        }:
             conditions.append(
-                "o.purchase_status = ?"
+                """EXISTS (
+                    SELECT 1 FROM order_items cancellation_item
+                    WHERE cancellation_item.order_id = o.id
+                      AND cancellation_item.cancellation_status = ?
+                )"""
+            )
+            parameters.append(purchase_status.strip())
+        elif purchase_status:
+            conditions.append(
+                """
+                o.purchase_status = ?
+                AND EXISTS (
+                    SELECT 1
+                    FROM order_items AS active_purchase_item
+                    WHERE active_purchase_item.order_id = o.id
+                      AND COALESCE(active_purchase_item.cancellation_status, '정상') = '정상'
+                )
+                """
             )
             parameters.append(
                 purchase_status.strip()
@@ -518,8 +545,38 @@ class OrderRepository:
                 o.delivery_message,
                 o.order_status,
                 o.payment_status,
-                o.mapping_status,
-                o.purchase_status,
+                CASE
+                    WHEN NOT EXISTS (
+                        SELECT 1
+                        FROM order_items AS active_mapping_item
+                        WHERE active_mapping_item.order_id = o.id
+                          AND COALESCE(active_mapping_item.cancellation_status, '정상') = '정상'
+                    )
+                    THEN '미발주취소'
+                    ELSE o.mapping_status
+                END AS mapping_status,
+                CASE
+                    WHEN NOT EXISTS (
+                        SELECT 1
+                        FROM order_items AS active_purchase_item
+                        WHERE active_purchase_item.order_id = o.id
+                          AND COALESCE(active_purchase_item.cancellation_status, '정상') = '정상'
+                    )
+                    THEN CASE
+                        WHEN EXISTS (
+                            SELECT 1 FROM order_items request_item
+                            WHERE request_item.order_id=o.id
+                              AND request_item.cancellation_status='발주후취소요청'
+                        ) THEN '발주후취소요청'
+                        WHEN EXISTS (
+                            SELECT 1 FROM order_items complete_item
+                            WHERE complete_item.order_id=o.id
+                              AND complete_item.cancellation_status='발주후취소완료'
+                        ) THEN '발주후취소완료'
+                        ELSE '미발주취소'
+                    END
+                    ELSE o.purchase_status
+                END AS purchase_status,
                 o.shipment_status,
                 o.total_amount,
                 o.source_file,
@@ -864,7 +921,10 @@ class OrderRepository:
             item.get("item_purchase_status") or ""
         ).strip()
 
-        if item_purchase_status:
+        cancellation_status = str(item.get("cancellation_status") or "정상")
+        if cancellation_status != "정상":
+            item["display_purchase_status"] = cancellation_status
+        elif item_purchase_status:
             item["display_purchase_status"] = (
                 item_purchase_status
             )
@@ -2068,6 +2128,208 @@ class OrderRepository:
             return cursor.rowcount
 
     # =========================================================
+    # 미발주 주문상품 취소
+    # =========================================================
+
+    def get_order_cancellation_items(
+        self,
+        order_id: int,
+    ) -> list[dict[str, Any]]:
+        """주문상품별 취소 상태와 실제 발주 여부를 조회합니다."""
+        valid_order_id = self._validate_id(order_id, "주문 ID")
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT
+                    oi.id AS order_item_id,
+                    oi.order_id,
+                    o.order_number,
+                    o.purchase_status AS order_purchase_status,
+                    oi.platform_product_name,
+                    oi.option_name,
+                    oi.quantity,
+                    COALESCE(s.supplier_name, '') AS supplier_name,
+                    COALESCE(oi.cancellation_status, '정상') AS cancellation_status,
+                    oi.cancellation_reason,
+                    oi.cancelled_at,
+                    oi.cancellation_requested_at,
+                    CASE WHEN sh.id IS NULL THEN 0 ELSE 1 END AS has_shipment,
+                    CASE WHEN po.id IS NULL THEN 0 ELSE 1 END AS is_purchased
+                FROM order_items AS oi
+                INNER JOIN orders AS o ON o.id = oi.order_id
+                LEFT JOIN suppliers AS s ON s.id = oi.supplier_id
+                LEFT JOIN purchase_orders AS po ON po.order_item_id = oi.id
+                LEFT JOIN shipments AS sh ON sh.order_item_id = oi.id
+                WHERE oi.order_id = ?
+                ORDER BY oi.id
+                """,
+                (valid_order_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def cancel_unpurchased_order_items(
+        self,
+        order_item_ids: Sequence[int],
+        cancellation_reason: str,
+    ) -> dict[str, Any]:
+        """발주 기록이 없는 주문상품만 삭제 없이 취소합니다."""
+        ids = list(dict.fromkeys(
+            self._validate_id(item_id, "주문상품 ID")
+            for item_id in order_item_ids
+        ))
+        if not ids:
+            raise ValueError("취소할 주문상품을 선택하세요.")
+
+        reason = str(cancellation_reason or "").strip()
+        valid_reason = reason in {
+            "고객취소", "품절", "공급처취소", "배송지연",
+            "고객변심", "상품변경", "중복주문",
+        } or (
+            reason.startswith("기타: ") and bool(reason[4:].strip())
+        )
+        if not valid_reason:
+            raise ValueError("올바른 취소사유를 입력하세요.")
+
+        placeholders = ",".join("?" for _ in ids)
+        cancelled_ids: list[int] = []
+        purchased_ids: list[int] = []
+        unavailable_ids: list[int] = []
+        already_cancelled_ids: list[int] = []
+
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            rows = connection.execute(
+                f"""
+                SELECT
+                    oi.id,
+                    o.purchase_status,
+                    COALESCE(oi.cancellation_status, '정상') AS cancellation_status,
+                    CASE WHEN po.id IS NULL THEN 0 ELSE 1 END AS is_purchased
+                FROM order_items AS oi
+                INNER JOIN orders AS o ON o.id = oi.order_id
+                LEFT JOIN purchase_orders AS po ON po.order_item_id = oi.id
+                WHERE oi.id IN ({placeholders})
+                """,
+                ids,
+            ).fetchall()
+            found = {int(row["id"]) for row in rows}
+            unavailable_ids.extend(item_id for item_id in ids if item_id not in found)
+
+            for row in rows:
+                item_id = int(row["id"])
+                if int(row["is_purchased"] or 0):
+                    purchased_ids.append(item_id)
+                    continue
+                if str(row["cancellation_status"] or "정상") != "정상":
+                    already_cancelled_ids.append(item_id)
+                    continue
+                if str(row["purchase_status"] or "") not in {"발주대기", "발주준비"}:
+                    unavailable_ids.append(item_id)
+                    continue
+
+                cursor = connection.execute(
+                    """
+                    UPDATE order_items
+                    SET cancellation_status = '미발주취소',
+                        cancellation_reason = ?,
+                        cancelled_at = CURRENT_TIMESTAMP,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                      AND COALESCE(cancellation_status, '정상') = '정상'
+                      AND NOT EXISTS (
+                          SELECT 1 FROM purchase_orders WHERE order_item_id = ?
+                      )
+                    """,
+                    (reason, item_id, item_id),
+                )
+                if cursor.rowcount:
+                    cancelled_ids.append(item_id)
+                else:
+                    purchased_ids.append(item_id)
+
+            connection.commit()
+
+        return {
+            "cancelled_ids": cancelled_ids,
+            "purchased_ids": purchased_ids,
+            "already_cancelled_ids": already_cancelled_ids,
+            "unavailable_ids": unavailable_ids,
+        }
+
+    def request_post_purchase_cancellation(
+        self, order_item_ids: Sequence[int], cancellation_reason: str
+    ) -> list[int]:
+        return self._update_post_purchase_cancellation(
+            order_item_ids, "request", cancellation_reason
+        )
+
+    def complete_post_purchase_cancellation(
+        self, order_item_ids: Sequence[int]
+    ) -> list[int]:
+        return self._update_post_purchase_cancellation(order_item_ids, "complete", "")
+
+    def restore_post_purchase_cancellation(
+        self, order_item_ids: Sequence[int]
+    ) -> list[int]:
+        return self._update_post_purchase_cancellation(order_item_ids, "restore", "")
+
+    def _update_post_purchase_cancellation(
+        self,
+        order_item_ids: Sequence[int],
+        action: str,
+        reason: str,
+    ) -> list[int]:
+        ids = list(dict.fromkeys(
+            self._validate_id(value, "주문상품 ID") for value in order_item_ids
+        ))
+        if not ids:
+            raise ValueError("처리할 주문상품을 선택하세요.")
+        if action == "request" and not str(reason or "").strip():
+            raise ValueError("취소사유를 입력하세요.")
+        placeholders = ",".join("?" for _ in ids)
+        changed: list[int] = []
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            rows = connection.execute(
+                f"""
+                SELECT oi.id, COALESCE(oi.cancellation_status, '정상') status,
+                       po.id purchase_order_id, sh.id shipment_id
+                FROM order_items oi
+                LEFT JOIN purchase_orders po ON po.order_item_id=oi.id
+                LEFT JOIN shipments sh ON sh.order_item_id=oi.id
+                WHERE oi.id IN ({placeholders})
+                """, ids,
+            ).fetchall()
+            if len(rows) != len(ids):
+                raise ValueError("일부 주문상품을 찾을 수 없습니다.")
+            expected = "정상" if action == "request" else "발주후취소요청"
+            for row in rows:
+                if row["purchase_order_id"] is None:
+                    raise ValueError("발주 후 취소는 발주 기록이 있는 상품만 가능합니다.")
+                if row["shipment_id"] is not None:
+                    raise ValueError("이미 송장이 등록된 주문입니다. 출고 여부를 별도로 확인해주세요.")
+                if str(row["status"]) != expected:
+                    raise ValueError(f"현재 상태에서는 처리할 수 없습니다: {row['status']}")
+            if action == "request":
+                sql = """UPDATE order_items SET cancellation_status='발주후취소요청',
+                         cancellation_reason=?, cancellation_requested_at=CURRENT_TIMESTAMP,
+                         cancelled_at=NULL, updated_at=CURRENT_TIMESTAMP WHERE id=?"""
+                params = [(str(reason).strip(), int(row["id"])) for row in rows]
+            elif action == "complete":
+                sql = """UPDATE order_items SET cancellation_status='발주후취소완료',
+                         cancelled_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?"""
+                params = [(int(row["id"]),) for row in rows]
+            else:
+                sql = """UPDATE order_items SET cancellation_status='정상',
+                         cancellation_reason=NULL, cancellation_requested_at=NULL,
+                         cancelled_at=NULL, updated_at=CURRENT_TIMESTAMP WHERE id=?"""
+                params = [(int(row["id"]),) for row in rows]
+            connection.executemany(sql, params)
+            changed = [int(row["id"]) for row in rows]
+            connection.commit()
+        return changed
+
+    # =========================================================
     # 주문 삭제
     # =========================================================
 
@@ -2126,6 +2388,12 @@ class OrderRepository:
                     SUM(
                         CASE
                             WHEN mapping_status = '미매핑'
+                                 AND EXISTS (
+                                     SELECT 1
+                                     FROM order_items AS active_mapping_item
+                                     WHERE active_mapping_item.order_id = orders.id
+                                       AND COALESCE(active_mapping_item.cancellation_status, '정상') = '정상'
+                                 )
                             THEN 1
                             ELSE 0
                         END
@@ -2134,6 +2402,12 @@ class OrderRepository:
                     SUM(
                         CASE
                             WHEN purchase_status = '발주대기'
+                                 AND EXISTS (
+                                     SELECT 1
+                                     FROM order_items AS active_purchase_item
+                                     WHERE active_purchase_item.order_id = orders.id
+                                       AND COALESCE(active_purchase_item.cancellation_status, '정상') = '정상'
+                                 )
                             THEN 1
                             ELSE 0
                         END

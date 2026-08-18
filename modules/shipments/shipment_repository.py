@@ -176,6 +176,78 @@ class ShipmentRepository:
 
         return row is not None
 
+    def get_manual_shipment_candidates(
+        self,
+        supplier_name: str,
+    ) -> list[dict]:
+        """선택 공급처의 발주완료·송장대기 주문상품을 조회합니다."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    po.id AS purchase_order_id,
+                    po.order_id,
+                    po.order_item_id,
+                    po.supplier_id,
+                    po.supplier_name,
+                    po.order_number,
+                    po.product_name,
+                    po.option_name,
+                    po.quantity,
+                    po.purchase_round,
+                    po.carrier AS purchase_carrier,
+                    po.receiver_name,
+                    po.receiver_phone,
+                    po.address,
+                    po.purchase_status,
+                    o.platform,
+                    o.ordered_at,
+                    o.shipment_status
+                FROM purchase_orders AS po
+                INNER JOIN orders AS o ON o.id = po.order_id
+                INNER JOIN order_items AS oi ON oi.id = po.order_item_id
+                LEFT JOIN shipments AS sh ON sh.order_item_id = po.order_item_id
+                WHERE TRIM(COALESCE(po.supplier_name, '')) = TRIM(?)
+                  AND po.purchase_status = '발주완료'
+                  AND COALESCE(oi.cancellation_status, '정상') = '정상'
+                  AND sh.id IS NULL
+                  AND o.shipment_status != '배송완료'
+                ORDER BY po.id
+                """,
+                (str(supplier_name or "").strip(),),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_manual_shipment_candidate(
+        self,
+        purchase_order_id: int,
+    ) -> dict | None:
+        """저장 직전 발주상품이 여전히 직접입력 가능한지 재확인합니다."""
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT
+                    po.id AS purchase_order_id,
+                    po.order_id,
+                    po.order_item_id,
+                    po.supplier_id,
+                    po.supplier_name,
+                    po.purchase_status
+                FROM purchase_orders AS po
+                INNER JOIN orders AS o ON o.id = po.order_id
+                INNER JOIN order_items AS oi ON oi.id = po.order_item_id
+                LEFT JOIN shipments AS sh ON sh.order_item_id = po.order_item_id
+                WHERE po.id = ?
+                  AND po.purchase_status = '발주완료'
+                  AND COALESCE(oi.cancellation_status, '정상') = '정상'
+                  AND sh.id IS NULL
+                  AND o.shipment_status != '배송완료'
+                LIMIT 1
+                """,
+                (int(purchase_order_id),),
+            ).fetchone()
+        return dict(row) if row is not None else None
+
     def find_match_candidates(
         self,
         *,
@@ -228,10 +300,14 @@ class ShipmentRepository:
 
             FROM purchase_orders AS po
 
+            INNER JOIN order_items AS oi
+                ON oi.id = po.order_item_id
+
             LEFT JOIN shipments AS sh
                 ON sh.order_item_id = po.order_item_id
 
             WHERE sh.id IS NULL
+              AND COALESCE(oi.cancellation_status, '정상') = '정상'
         """
 
         with self._connect() as conn:

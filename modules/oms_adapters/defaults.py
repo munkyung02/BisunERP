@@ -4,6 +4,7 @@ from modules.oms_adapters.legacy_excel_adapter import LegacyExcelOrderAdapter
 from modules.oms_adapters.registry import OMSAdapterRegistry
 from modules.orders.coupang_order_parser import CoupangOrderExcelParser
 from modules.orders.esm_order_parser import ESMOrderExcelParser
+from modules.orders.kakao_order_parser import KakaoOrderExcelParser
 from modules.orders.lotteon_order_parser import LotteOnOrderExcelParser
 from modules.orders.smartstore_order_parser import SmartStoreOrderExcelParser
 from modules.orders.toss_order_parser import TossOrderExcelParser
@@ -55,6 +56,15 @@ def create_default_adapter_registry() -> OMSAdapterRegistry:
             display_name="토스쇼핑 주문배송관리 Excel",
             version="1.0",
             priority=500,
+        )
+    )
+    registry.register(
+        LegacyExcelOrderAdapter(
+            KakaoOrderExcelParser(),
+            adapter_id="kakao.excel.orders",
+            display_name="카카오 톡스토어 발주서 Excel",
+            version="1.0",
+            priority=600,
         )
     )
     return registry

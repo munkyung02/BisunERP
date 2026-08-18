@@ -1,3 +1,4 @@
+import json
 import re
 import sqlite3
 from collections import defaultdict
@@ -10,6 +11,7 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 from modules.templates import get_purchase_template
+from modules.products.product_shipping_policy_repository import ProductShippingPolicyRepository
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -88,6 +90,14 @@ class PurchaseService:
                 o.delivery_message,
                 o.purchase_status,
 
+                (
+                    SELECT metadata.raw_source_json
+                    FROM channel_order_item_metadata AS metadata
+                    WHERE metadata.order_item_id = oi.id
+                    ORDER BY metadata.id DESC
+                    LIMIT 1
+                ) AS raw_source_json,
+
                 p.product_code AS supplier_product_code,
                 p.product_name,
                 p.supplier_product_name,
@@ -116,6 +126,7 @@ class PurchaseService:
 
             WHERE oi.product_id IS NOT NULL
               AND oi.supplier_id IS NOT NULL
+              AND COALESCE(oi.cancellation_status, '정상') = '정상'
               AND oi.mapping_status != '미매핑'
               AND o.mapping_status = '매핑완료'
               AND o.purchase_status IN (
@@ -242,6 +253,34 @@ class PurchaseService:
             return default
         return converted if converted > 0 else default
 
+    @classmethod
+    def _snapshot_shipping_fee(
+        cls,
+        item: dict[str, Any],
+        base_shipping_fee: int,
+    ) -> int:
+        """쿠팡 도서산간 추가배송비를 발주 당시 배송비에 포함합니다."""
+        shipping_fee = max(0, int(base_shipping_fee))
+        if str(item.get("platform") or "").strip() != "쿠팡":
+            return shipping_fee
+
+        try:
+            raw_source = json.loads(str(item.get("raw_source_json") or "{}"))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return shipping_fee
+
+        remote_fee = cls._safe_amount(
+            raw_source.get("도서산간 추가배송비")
+        )
+        return shipping_fee + remote_fee
+
+    @staticmethod
+    def _safe_amount(value: Any) -> int:
+        try:
+            return max(0, int(float(str(value or 0).replace(",", ""))))
+        except (TypeError, ValueError):
+            return 0
+
     # =========================================================
     # 발주 생성
     # =========================================================
@@ -353,6 +392,42 @@ class PurchaseService:
                             ),
                         )
 
+                        # Finalize and validate snapshot values before INSERT
+                        product_id = int(item.get("product_id") or 0)
+                        if product_id <= 0:
+                            raise ValueError(
+                                f"상품 아이디가 없습니다: 상품명={item.get('product_name') or item.get('platform_product_name') or ''}, product_id={item.get('product_id')}"
+                            )
+
+                        # Use only already-computed purchase_quantity
+                        try:
+                            purchase_quantity = int(item["purchase_quantity"])
+                        except Exception:
+                            raise ValueError(
+                                f"발주 수량이 올바르지 않습니다: order_item_id={order_item_id}"
+                            )
+
+                        unit_price = int(item.get("unit_price") or 0)
+                        if unit_price <= 0:
+                            raise ValueError(
+                                f"상품 원가가 설정되지 않았습니다: 상품명={item.get('product_name') or item.get('platform_product_name') or ''}, product_id={product_id}"
+                            )
+
+                        item_amount = int(unit_price) * int(purchase_quantity)
+
+                        shipping_policy_repo = ProductShippingPolicyRepository()
+                        shipping_fee = shipping_policy_repo.get_shipping_fee(
+                            int(product_id), int(purchase_quantity)
+                        )
+                        if shipping_fee is None:
+                            raise ValueError(
+                                f"상품 배송정책이 없습니다: 상품명={item.get('product_name') or item.get('platform_product_name') or ''}, product_id={product_id}, 수량={purchase_quantity}"
+                            )
+                        shipping_fee = self._snapshot_shipping_fee(
+                            item,
+                            int(shipping_fee),
+                        )
+
                         connection.execute(
                             """
                             INSERT INTO purchase_orders (
@@ -410,10 +485,7 @@ class PurchaseService:
                                     )
                                 ),
                                 item.get("option_name"),
-                                item.get(
-                                    "purchase_quantity",
-                                    item.get("quantity", 1),
-                                ),
+                                purchase_quantity,
                                 item.get("receiver_name"),
                                 item.get("receiver_phone"),
                                 item.get("postal_code"),
@@ -423,9 +495,9 @@ class PurchaseService:
                                 ),
                                 str(file_path),
                                 item.get("supplier_product_code") or item.get("product_code") or "",
-                                int(item.get("unit_price") or 0),
-                                int(item.get("item_amount") or 0),
-                                int(item.get("shipping_fee") or 0),
+                                int(unit_price),
+                                int(item_amount),
+                                int(shipping_fee),
                                 item.get("carrier") or "",
                                 item.get("purchase_round") or "기본",
                             ),
@@ -451,6 +523,7 @@ class PurchaseService:
                             ON po.order_item_id = oi.id
 
                         WHERE oi.order_id = ?
+                          AND COALESCE(oi.cancellation_status, '정상') = '정상'
                           AND po.id IS NULL
                         """,
                         (order_id,),

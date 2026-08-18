@@ -21,6 +21,7 @@ from modules.shipments.channel_shipment_export_service import (
 )
 from modules.shipments.simple_import_dialog import SimpleShipmentImportDialog
 from modules.shipments.shipment_format_dialog import ShipmentFormatDialog
+from modules.shipments.manual_shipment_dialog import ManualShipmentDialog
 
 
 class ShipmentPage(ttk.Frame):
@@ -124,11 +125,6 @@ class ShipmentPage(ttk.Frame):
             action_frame,
             text="간편 송장 일괄등록",
             command=self.open_simple_import,
-        ).pack(side="left", padx=(0, 8))
-        ttk.Button(
-            action_frame,
-            text="쿠팡 실패건 재전송",
-            command=self.retry_failed_coupang_shipments,
         ).pack(side="left", padx=(0, 8))
         ttk.Button(
             action_frame,
@@ -243,6 +239,12 @@ class ShipmentPage(ttk.Frame):
             padx=(8, 0),
         )
 
+        ttk.Button(
+            frame,
+            text="송장 직접입력",
+            command=self.open_manual_shipment,
+        ).grid(row=0, column=5, padx=(8, 0))
+
         self.save_button = ttk.Button(
             frame,
             text="매칭 송장 저장",
@@ -250,16 +252,6 @@ class ShipmentPage(ttk.Frame):
             state="disabled",
         )
         self.save_button.grid(
-            row=0,
-            column=5,
-            padx=(8, 0),
-        )
-
-        ttk.Button(
-            frame,
-            text="쿠팡 송장등록파일 생성",
-            command=self.export_coupang_file,
-        ).grid(
             row=0,
             column=6,
             padx=(8, 0),
@@ -828,6 +820,20 @@ class ShipmentPage(ttk.Frame):
 
         self.load_saved_shipments()
 
+    def open_manual_shipment(self) -> None:
+        supplier_name = self.supplier_var.get().strip()
+        if not supplier_name:
+            messagebox.showwarning(
+                "공급처 선택", "송장을 입력할 공급처를 선택해 주세요.", parent=self
+            )
+            return
+        ManualShipmentDialog(
+            self,
+            service=self.service,
+            supplier_name=supplier_name,
+            on_saved=self.load_saved_shipments,
+        )
+
     def retry_failed_coupang_shipments(self) -> None:
         if not messagebox.askyesno(
             "쿠팡 재전송",
@@ -916,6 +922,7 @@ class ShipmentPage(ttk.Frame):
             gmarket_result = self.channel_export_service.export_gmarket()
             auction_result = self.channel_export_service.export_auction()
             lotteon_result = self.channel_export_service.export_lotteon()
+            toss_result = self.channel_export_service.export_toss()
         except Exception as error:
             messagebox.showerror(
                 "채널별 송장파일 생성 오류",
@@ -932,6 +939,7 @@ class ShipmentPage(ttk.Frame):
                 gmarket_result,
                 auction_result,
                 lotteon_result,
+                toss_result,
             )
         ):
             messagebox.showinfo(
@@ -942,6 +950,7 @@ class ShipmentPage(ttk.Frame):
                     f"Gmarket: {gmarket_result.get('message', '생성 대상 없음')}\n"
                     f"Auction: {auction_result.get('message', '생성 대상 없음')}\n"
                     f"롯데ON: {lotteon_result.get('message', '생성 대상 없음')}\n"
+                    f"Toss: {toss_result.get('message', '생성 대상 없음')}\n"
                     "스마트스토어 메타데이터 없음: "
                     f"{smartstore_result.get('missing_metadata_count', 0):,}건\n"
                     "Gmarket 메타데이터 없음: "
@@ -965,6 +974,7 @@ class ShipmentPage(ttk.Frame):
                 gmarket_result,
                 auction_result,
                 lotteon_result,
+                toss_result,
             )
             if result.get("created")
         ]
@@ -976,6 +986,7 @@ class ShipmentPage(ttk.Frame):
                 f"Gmarket: {gmarket_result.get('exported_count', 0):,}건\n"
                 f"Auction: {auction_result.get('exported_count', 0):,}건\n"
                 f"롯데ON: {lotteon_result.get('exported_count', 0):,}건\n"
+                f"Toss: {toss_result.get('exported_count', 0):,}건\n"
                 "스마트스토어 메타데이터 없음: "
                 f"{smartstore_result.get('missing_metadata_count', 0):,}건\n"
                 "Gmarket 메타데이터 없음: "
@@ -992,6 +1003,8 @@ class ShipmentPage(ttk.Frame):
                 f"{lotteon_result.get('incomplete_raw_count', 0):,}건\n"
                 "롯데ON 미지원 배송사: "
                 f"{lotteon_result.get('unsupported_carrier_count', 0):,}건\n\n"
+                "Toss 원본 데이터 불완전: "
+                f"{toss_result.get('incomplete_raw_count', 0):,}건\n\n"
                 "저장 위치\n" + "\n".join(output_paths)
             ),
             parent=self,
@@ -1037,6 +1050,10 @@ class ShipmentPage(ttk.Frame):
                 shipment_ids=shipment_ids,
                 reexport=True,
             )
+            toss_result = self.channel_export_service.export_toss(
+                shipment_ids=shipment_ids,
+                reexport=True,
+            )
         except Exception as error:
             messagebox.showerror(
                 "선택 송장 재출력 오류",
@@ -1053,6 +1070,7 @@ class ShipmentPage(ttk.Frame):
                 gmarket_result,
                 auction_result,
                 lotteon_result,
+                toss_result,
             )
         ):
             messagebox.showinfo(
@@ -1063,6 +1081,7 @@ class ShipmentPage(ttk.Frame):
                     f"Gmarket: {gmarket_result.get('message', '재출력 대상 없음')}\n"
                     f"Auction: {auction_result.get('message', '재출력 대상 없음')}\n"
                     f"롯데ON: {lotteon_result.get('message', '재출력 대상 없음')}\n"
+                    f"Toss: {toss_result.get('message', '재출력 대상 없음')}\n"
                     "스마트스토어 메타데이터 없음: "
                     f"{smartstore_result.get('missing_metadata_count', 0):,}건\n"
                     "Gmarket 메타데이터 없음: "
@@ -1086,6 +1105,7 @@ class ShipmentPage(ttk.Frame):
                 gmarket_result,
                 auction_result,
                 lotteon_result,
+                toss_result,
             )
             if result.get("created")
         ]
@@ -1097,6 +1117,7 @@ class ShipmentPage(ttk.Frame):
                 f"Gmarket: {gmarket_result.get('exported_count', 0):,}건\n"
                 f"Auction: {auction_result.get('exported_count', 0):,}건\n"
                 f"롯데ON: {lotteon_result.get('exported_count', 0):,}건\n"
+                f"Toss: {toss_result.get('exported_count', 0):,}건\n"
                 "스마트스토어 메타데이터 없음: "
                 f"{smartstore_result.get('missing_metadata_count', 0):,}건\n"
                 "Gmarket 메타데이터 없음: "
@@ -1113,6 +1134,8 @@ class ShipmentPage(ttk.Frame):
                 f"{lotteon_result.get('incomplete_raw_count', 0):,}건\n"
                 "롯데ON 미지원 배송사: "
                 f"{lotteon_result.get('unsupported_carrier_count', 0):,}건\n\n"
+                "Toss 원본 데이터 불완전: "
+                f"{toss_result.get('incomplete_raw_count', 0):,}건\n\n"
                 "저장 위치\n" + "\n".join(output_paths)
             ),
             parent=self,

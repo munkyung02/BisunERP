@@ -7,12 +7,22 @@ from .base import PurchaseTemplate
 from .default_template import DefaultPurchaseTemplate
 from .summary_only_template import SummaryOnlyPurchaseTemplate
 from .haedam_template import HaedamPurchaseTemplate
+from .foodpresident_template import FoodPresidentPurchaseTemplate
+from .juyeong_template import JuyeongSeafoodPurchaseTemplate
+from .mangob2b_template import MangoB2BPuchaseTemplate
+from .wahyun_template import WahyunFarmPurchaseTemplate
+from .master_template import MasterYutongPurchaseTemplate
 
 
 TEMPLATE_CLASSES: dict[str, type[PurchaseTemplate]] = {
     DefaultPurchaseTemplate.template_key: DefaultPurchaseTemplate,
     SummaryOnlyPurchaseTemplate.template_key: SummaryOnlyPurchaseTemplate,
     HaedamPurchaseTemplate.template_key: HaedamPurchaseTemplate,
+    FoodPresidentPurchaseTemplate.template_key: FoodPresidentPurchaseTemplate,
+    JuyeongSeafoodPurchaseTemplate.template_key: JuyeongSeafoodPurchaseTemplate,
+    MangoB2BPuchaseTemplate.template_key: MangoB2BPuchaseTemplate,
+    WahyunFarmPurchaseTemplate.template_key: WahyunFarmPurchaseTemplate,
+    MasterYutongPurchaseTemplate.template_key: MasterYutongPurchaseTemplate,
 }
 
 CONFIG_PATH = Path(__file__).with_name(

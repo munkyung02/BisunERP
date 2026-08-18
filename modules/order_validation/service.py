@@ -19,6 +19,12 @@ class OrderValidationService:
         if order is None:
             raise ValueError("주문을 찾을 수 없습니다.")
 
+        order = dict(order)
+        order["items"] = [
+            item
+            for item in (order.get("items") or [])
+            if str(item.get("cancellation_status") or "정상").strip() == "정상"
+        ]
         issues = validate_order(order)
         failed_count = sum(issue.level == "FAIL" for issue in issues)
         warning_count = sum(issue.level == "WARNING" for issue in issues)

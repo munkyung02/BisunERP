@@ -315,6 +315,9 @@ class OrderPage:
                 "발주준비",
                 "발주완료",
                 "발주취소",
+                "미발주취소",
+                "발주후취소요청",
+                "발주후취소완료",
             ],
             state="readonly",
             width=11,
@@ -449,6 +452,13 @@ class OrderPage:
             padx=(0, 8),
         )
 
+        ttk.Button(
+            left_frame,
+            text="미발주 주문 취소",
+            command=self.cancel_selected_order,
+            style="Toolbar.TButton",
+        ).pack(side="left", padx=(0, 8))
+
         right_frame = tk.Frame(action_frame)
         right_frame.pack(side="right")
 
@@ -503,6 +513,11 @@ class OrderPage:
             show="headings",
             style="Order.Treeview",
             selectmode="browse",
+        )
+        self.order_tree.tag_configure(
+            "unpurchased_cancelled",
+            background="#FFF1F2",
+            foreground="#9F1239",
         )
 
         headings = {
@@ -666,6 +681,11 @@ class OrderPage:
 
             for order in orders:
                 item_id = str(order["id"])
+                row_tags = (
+                    ("unpurchased_cancelled",)
+                    if str(order.get("purchase_status") or "") == "미발주취소"
+                    else ()
+                )
 
                 self.order_rows[item_id] = order
 
@@ -673,6 +693,7 @@ class OrderPage:
                     "",
                     "end",
                     iid=item_id,
+                    tags=row_tags,
                     values=(
                         self._display(
                             order.get("platform")
@@ -977,6 +998,75 @@ class OrderPage:
                 parent=self.window,
             )
 
+    def cancel_selected_order(self) -> None:
+        order_id = self._get_selected_order_id()
+        if order_id is None:
+            messagebox.showwarning(
+                "주문 선택", "취소할 주문을 선택해주세요.", parent=self.window
+            )
+            return
+        try:
+            items = self.repository.get_order_cancellation_items(order_id)
+            if not items:
+                messagebox.showwarning(
+                    "주문상품 없음", "취소할 주문상품이 없습니다.", parent=self.window
+                )
+                return
+            dialog = OrderCancellationDialog(self.window, items)
+            self.window.wait_window(dialog.window)
+            if dialog.result is None:
+                return
+            action = dialog.result.get("action", "unpaid")
+            if action == "request":
+                changed = self.repository.request_post_purchase_cancellation(
+                    dialog.result["order_item_ids"], dialog.result["reason"]
+                )
+                self.refresh_orders()
+                messagebox.showinfo("발주 후 취소 요청", f"취소요청 {len(changed):,}건을 등록했습니다.", parent=self.window)
+                return
+            if action == "complete":
+                changed = self.repository.complete_post_purchase_cancellation(dialog.result["order_item_ids"])
+                self.refresh_orders()
+                messagebox.showinfo("발주 후 취소완료", f"취소완료 {len(changed):,}건을 처리했습니다.", parent=self.window)
+                return
+            if action == "restore":
+                changed = self.repository.restore_post_purchase_cancellation(dialog.result["order_item_ids"])
+                self.refresh_orders()
+                messagebox.showinfo("취소요청 철회", f"정상복귀 {len(changed):,}건을 처리했습니다.", parent=self.window)
+                return
+            result = self.repository.cancel_unpurchased_order_items(
+                dialog.result["order_item_ids"], dialog.result["reason"]
+            )
+            self.refresh_orders()
+            cancelled_count = len(result["cancelled_ids"])
+            purchased_count = len(result["purchased_ids"])
+            if purchased_count:
+                messagebox.showwarning(
+                    "발주 후 취소 주의",
+                    "이미 발주된 주문입니다.\n공급처에 취소 요청이 필요한 주문입니다.\n\n"
+                    f"일반 취소 차단: {purchased_count:,}건\n"
+                    f"미발주 취소 완료: {cancelled_count:,}건",
+                    parent=self.window,
+                )
+            elif cancelled_count:
+                messagebox.showinfo(
+                    "미발주 주문 취소",
+                    f"미발주 주문상품 {cancelled_count:,}건을 취소했습니다.",
+                    parent=self.window,
+                )
+            else:
+                messagebox.showwarning(
+                    "취소 대상 없음",
+                    "취소 가능한 미발주 주문상품이 없습니다.",
+                    parent=self.window,
+                )
+        except Exception as error:
+            messagebox.showerror(
+                "주문 취소 오류",
+                f"미발주 주문을 취소하지 못했습니다.\n\n{error}",
+                parent=self.window,
+            )
+
     # =========================================================
     # 준비 중 기능
     # =========================================================
@@ -1212,6 +1302,159 @@ class OrderPage:
         except (TypeError, ValueError):
             return "0원"
 
+
+
+class OrderCancellationDialog:
+    """선택 주문의 상품별 미발주 취소 확인창입니다."""
+
+    REASONS = (
+        "고객취소", "고객변심", "배송지연", "상품변경",
+        "중복주문", "품절", "공급처취소", "기타",
+    )
+
+    def __init__(self, parent: tk.Misc, items: list[dict[str, Any]]) -> None:
+        self.items = items
+        self.result: dict[str, Any] | None = None
+        self.reason_var = tk.StringVar(value="고객취소")
+        self.memo_var = tk.StringVar()
+        self.window = tk.Toplevel(parent)
+        self.window.title("미발주 주문 취소")
+        self.window.geometry("980x520")
+        self.window.minsize(820, 440)
+        self.window.transient(parent)
+        self.window.grab_set()
+        self._create_ui()
+        self.window.focus_force()
+
+    def _create_ui(self) -> None:
+        order_number = str(self.items[0].get("order_number") or "")
+        tk.Label(
+            self.window,
+            text=f"주문번호: {order_number}",
+            font=("맑은 고딕", 13, "bold"),
+            anchor="w",
+        ).pack(fill="x", padx=18, pady=(16, 8))
+        tk.Label(
+            self.window,
+            text="취소할 상품을 선택하세요. 이미 발주된 상품은 일반 취소되지 않습니다.",
+            anchor="w",
+        ).pack(fill="x", padx=18, pady=(0, 8))
+
+        columns = ("product", "quantity", "supplier", "purchase", "cancellation")
+        self.tree = ttk.Treeview(
+            self.window, columns=columns, show="headings", selectmode="extended"
+        )
+        labels = {
+            "product": "상품명 / 옵션",
+            "quantity": "수량",
+            "supplier": "공급처",
+            "purchase": "발주 여부",
+            "cancellation": "취소 상태",
+        }
+        widths = {
+            "product": 390,
+            "quantity": 70,
+            "supplier": 160,
+            "purchase": 120,
+            "cancellation": 130,
+        }
+        for column in columns:
+            self.tree.heading(column, text=labels[column])
+            self.tree.column(
+                column,
+                width=widths[column],
+                anchor="w" if column in {"product", "supplier"} else "center",
+            )
+        self.tree.pack(fill="both", expand=True, padx=18, pady=(0, 10))
+
+        eligible: list[str] = []
+        for item in self.items:
+            item_id = str(item["order_item_id"])
+            option = str(item.get("option_name") or "").strip()
+            product = str(item.get("platform_product_name") or "")
+            if option:
+                product = f"{product} / {option}"
+            purchased = bool(item.get("is_purchased"))
+            cancellation = str(item.get("cancellation_status") or "정상")
+            self.tree.insert(
+                "",
+                "end",
+                iid=item_id,
+                values=(
+                    product,
+                    int(item.get("quantity") or 0),
+                    str(item.get("supplier_name") or "미지정"),
+                    "발주완료" if purchased else "미발주",
+                    cancellation,
+                ),
+            )
+            if (
+                not purchased
+                and cancellation == "정상"
+                and str(item.get("order_purchase_status") or "")
+                in {"발주대기", "발주준비"}
+            ):
+                eligible.append(item_id)
+        if eligible:
+            self.tree.selection_set(eligible)
+
+        reason_frame = ttk.Frame(self.window)
+        reason_frame.pack(fill="x", padx=18, pady=(0, 10))
+        ttk.Label(reason_frame, text="취소사유").pack(side="left")
+        reason_combo = ttk.Combobox(
+            reason_frame,
+            textvariable=self.reason_var,
+            values=self.REASONS,
+            state="readonly",
+            width=14,
+        )
+        reason_combo.pack(side="left", padx=(8, 18))
+        ttk.Label(reason_frame, text="기타 메모").pack(side="left")
+        ttk.Entry(reason_frame, textvariable=self.memo_var, width=42).pack(
+            side="left", padx=(8, 0), fill="x", expand=True
+        )
+
+        buttons = ttk.Frame(self.window)
+        buttons.pack(fill="x", padx=18, pady=(0, 16))
+        ttk.Button(buttons, text="취소", command=self.window.destroy).pack(side="right")
+        ttk.Button(buttons, text="정상복귀", command=lambda: self._confirm("restore")).pack(side="left")
+        ttk.Button(buttons, text="취소완료", command=lambda: self._confirm("complete")).pack(side="left", padx=6)
+        ttk.Button(buttons, text="발주 후 취소요청", command=lambda: self._confirm("request")).pack(side="left")
+        ttk.Button(buttons, text="선택 상품 취소", command=lambda: self._confirm("unpaid")).pack(
+            side="right", padx=(0, 8)
+        )
+
+    def _confirm(self, action: str = "unpaid") -> None:
+        selected = [int(item_id) for item_id in self.tree.selection()]
+        if not selected:
+            messagebox.showwarning(
+                "상품 선택", "취소할 주문상품을 선택하세요.", parent=self.window
+            )
+            return
+        reason = self.reason_var.get().strip()
+        if reason == "기타":
+            memo = self.memo_var.get().strip()
+            if not memo:
+                messagebox.showwarning(
+                    "기타 메모", "기타 취소사유를 입력하세요.", parent=self.window
+                )
+                return
+            reason = f"기타: {memo}"
+        messages = {
+            "unpaid": ("미발주 주문 취소 확인", "미발주 상품을 취소합니다."),
+            "request": ("발주 후 취소요청 확인", "기존 발주 기록은 삭제되지 않습니다. 공급처 확인 후 취소완료 또는 정상복귀를 처리하세요."),
+            "complete": ("발주 후 취소완료 확인", "공급처에서 실제 취소가 완료된 상품만 처리하세요."),
+            "restore": ("취소요청 철회 확인", "취소요청을 철회하고 정상 발주 상태로 복귀합니다."),
+        }
+        title, detail = messages[action]
+        if not messagebox.askyesno(
+            title,
+            f"선택한 주문상품 {len(selected):,}건을 처리하시겠습니까?\n\n{detail}",
+            parent=self.window,
+        ):
+            return
+        self.result = {"order_item_ids": selected, "reason": reason, "action": action}
+        self.window.destroy()
 
 
 class OrderDetailWindow:
@@ -1720,9 +1963,11 @@ class OrderDetailWindow:
         button_frame = tk.Frame(
             self.window,
             padx=22,
+        )
+        button_frame.pack(
+            fill="x",
             pady=(0, 15),
         )
-        button_frame.pack(fill="x")
 
         tk.Label(
             button_frame,

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +32,18 @@ class PurchaseDashboardRepository:
 
         return {str(row["name"]) for row in rows}
 
+    def get_order_count(self, *, start_date: str, end_date: str) -> int:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT COUNT(*)
+                FROM orders
+                WHERE DATE(ordered_at) BETWEEN DATE(?) AND DATE(?)
+                """,
+                (start_date, end_date),
+            ).fetchone()
+        return int(row[0] or 0)
+
     def get_kpi_summary(
         self,
         *,
@@ -41,17 +52,17 @@ class PurchaseDashboardRepository:
     ) -> dict[str, Any]:
         columns = self._purchase_columns()
         item_amount_sql = (
-            "COALESCE(item_amount, 0)"
+            "COALESCE(po.item_amount, 0)"
             if "item_amount" in columns
             else "0"
         )
         shipping_fee_sql = (
-            "COALESCE(shipping_fee, 0)"
+            "COALESCE(po.shipping_fee, 0)"
             if "shipping_fee" in columns
             else "0"
         )
         unit_price_sql = (
-            "COALESCE(unit_price, 0)"
+            "COALESCE(po.unit_price, 0)"
             if "unit_price" in columns
             else "0"
         )
@@ -61,7 +72,7 @@ class PurchaseDashboardRepository:
                 f"""
                 SELECT
                     COUNT(*) AS purchase_count,
-                    COALESCE(SUM(quantity), 0) AS total_quantity,
+                    COALESCE(SUM(po.quantity), 0) AS total_quantity,
                     COALESCE(SUM({item_amount_sql}), 0)
                         AS total_item_amount,
                     COALESCE(SUM({shipping_fee_sql}), 0)
@@ -70,19 +81,17 @@ class PurchaseDashboardRepository:
                         SUM({item_amount_sql} + {shipping_fee_sql}),
                         0
                     ) AS grand_total,
-                    COUNT(DISTINCT supplier_id)
+                    COUNT(DISTINCT po.supplier_id)
                         AS supplier_count,
                     COALESCE(
                         AVG(NULLIF({unit_price_sql}, 0)),
                         0
                     ) AS average_unit_price
-                FROM purchase_orders
-                WHERE purchase_status = '발주완료'
-                  AND DATE(
-                        COALESCE(purchased_at, created_at),
-                        'localtime'
-                      )
-                      BETWEEN DATE(?) AND DATE(?)
+                FROM purchase_orders AS po
+                JOIN order_items AS oi ON oi.id = po.order_item_id
+                JOIN orders AS o ON o.id = oi.order_id
+                WHERE po.purchase_status = '발주완료'
+                  AND DATE(o.ordered_at) BETWEEN DATE(?) AND DATE(?)
                 """,
                 (start_date, end_date),
             ).fetchone()
@@ -99,13 +108,6 @@ class PurchaseDashboardRepository:
         result["pending_count"] = int(pending_row["count"] or 0)
         return result
 
-    def get_today_summary(self) -> dict[str, Any]:
-        today = date.today().isoformat()
-        return self.get_kpi_summary(
-            start_date=today,
-            end_date=today,
-        )
-
     def get_supplier_ranking(
         self,
         *,
@@ -115,12 +117,12 @@ class PurchaseDashboardRepository:
     ) -> list[dict[str, Any]]:
         columns = self._purchase_columns()
         item_amount_sql = (
-            "COALESCE(item_amount, 0)"
+            "COALESCE(po.item_amount, 0)"
             if "item_amount" in columns
             else "0"
         )
         shipping_fee_sql = (
-            "COALESCE(shipping_fee, 0)"
+            "COALESCE(po.shipping_fee, 0)"
             if "shipping_fee" in columns
             else "0"
         )
@@ -129,13 +131,13 @@ class PurchaseDashboardRepository:
             rows = connection.execute(
                 f"""
                 SELECT
-                    supplier_id,
+                    po.supplier_id,
                     COALESCE(
                         NULLIF(TRIM(supplier_name), ''),
                         '공급처 미지정'
                     ) AS supplier_name,
                     COUNT(*) AS purchase_count,
-                    COALESCE(SUM(quantity), 0) AS total_quantity,
+                    COALESCE(SUM(po.quantity), 0) AS total_quantity,
                     COALESCE(SUM({item_amount_sql}), 0)
                         AS total_item_amount,
                     COALESCE(SUM({shipping_fee_sql}), 0)
@@ -144,14 +146,12 @@ class PurchaseDashboardRepository:
                         SUM({item_amount_sql} + {shipping_fee_sql}),
                         0
                     ) AS grand_total
-                FROM purchase_orders
-                WHERE purchase_status = '발주완료'
-                  AND DATE(
-                        COALESCE(purchased_at, created_at),
-                        'localtime'
-                      )
-                      BETWEEN DATE(?) AND DATE(?)
-                GROUP BY supplier_id, supplier_name
+                FROM purchase_orders AS po
+                JOIN order_items AS oi ON oi.id = po.order_item_id
+                JOIN orders AS o ON o.id = oi.order_id
+                WHERE po.purchase_status = '발주완료'
+                  AND DATE(o.ordered_at) BETWEEN DATE(?) AND DATE(?)
+                GROUP BY po.supplier_id, supplier_name
                 ORDER BY
                     grand_total DESC,
                     total_quantity DESC,
@@ -172,17 +172,17 @@ class PurchaseDashboardRepository:
     ) -> list[dict[str, Any]]:
         columns = self._purchase_columns()
         item_amount_sql = (
-            "COALESCE(item_amount, 0)"
+            "COALESCE(po.item_amount, 0)"
             if "item_amount" in columns
             else "0"
         )
         unit_price_sql = (
-            "COALESCE(unit_price, 0)"
+            "COALESCE(po.unit_price, 0)"
             if "unit_price" in columns
             else "0"
         )
         product_code_select = (
-            "supplier_product_code"
+            "po.supplier_product_code"
             if "supplier_product_code" in columns
             else "NULL"
         )
@@ -197,20 +197,18 @@ class PurchaseDashboardRepository:
                         '상품명 미지정'
                     ) AS product_name,
                     COUNT(*) AS purchase_count,
-                    COALESCE(SUM(quantity), 0) AS total_quantity,
+                    COALESCE(SUM(po.quantity), 0) AS total_quantity,
                     COALESCE(
                         AVG(NULLIF({unit_price_sql}, 0)),
                         0
                     ) AS average_unit_price,
                     COALESCE(SUM({item_amount_sql}), 0)
                         AS total_item_amount
-                FROM purchase_orders
-                WHERE purchase_status = '발주완료'
-                  AND DATE(
-                        COALESCE(purchased_at, created_at),
-                        'localtime'
-                      )
-                      BETWEEN DATE(?) AND DATE(?)
+                FROM purchase_orders AS po
+                JOIN order_items AS oi ON oi.id = po.order_item_id
+                JOIN orders AS o ON o.id = oi.order_id
+                WHERE po.purchase_status = '발주완료'
+                  AND DATE(o.ordered_at) BETWEEN DATE(?) AND DATE(?)
                 GROUP BY
                     {product_code_select},
                     product_name
@@ -228,16 +226,17 @@ class PurchaseDashboardRepository:
     def get_monthly_statistics(
         self,
         *,
-        months: int = 12,
+        start_date: str,
+        end_date: str,
     ) -> list[dict[str, Any]]:
         columns = self._purchase_columns()
         item_amount_sql = (
-            "COALESCE(item_amount, 0)"
+            "COALESCE(po.item_amount, 0)"
             if "item_amount" in columns
             else "0"
         )
         shipping_fee_sql = (
-            "COALESCE(shipping_fee, 0)"
+            "COALESCE(po.shipping_fee, 0)"
             if "shipping_fee" in columns
             else "0"
         )
@@ -248,12 +247,11 @@ class PurchaseDashboardRepository:
                 SELECT
                     STRFTIME(
                         '%Y-%m',
-                        COALESCE(purchased_at, created_at),
-                        'localtime'
+                        o.ordered_at
                     ) AS month,
                     COUNT(*) AS purchase_count,
-                    COALESCE(SUM(quantity), 0) AS total_quantity,
-                    COUNT(DISTINCT supplier_id)
+                    COALESCE(SUM(po.quantity), 0) AS total_quantity,
+                    COUNT(DISTINCT po.supplier_id)
                         AS supplier_count,
                     COALESCE(SUM({item_amount_sql}), 0)
                         AS total_item_amount,
@@ -263,22 +261,15 @@ class PurchaseDashboardRepository:
                         SUM({item_amount_sql} + {shipping_fee_sql}),
                         0
                     ) AS grand_total
-                FROM purchase_orders
-                WHERE purchase_status = '발주완료'
-                  AND DATE(
-                        COALESCE(purchased_at, created_at),
-                        'localtime'
-                      )
-                      >= DATE(
-                            'now',
-                            'start of month',
-                            ?,
-                            'localtime'
-                      )
+                FROM purchase_orders AS po
+                JOIN order_items AS oi ON oi.id = po.order_item_id
+                JOIN orders AS o ON o.id = oi.order_id
+                WHERE po.purchase_status = '발주완료'
+                  AND DATE(o.ordered_at) BETWEEN DATE(?) AND DATE(?)
                 GROUP BY month
                 ORDER BY month
                 """,
-                (f"-{max(0, int(months) - 1)} months",),
+                (start_date, end_date),
             ).fetchall()
 
         return [dict(row) for row in rows]

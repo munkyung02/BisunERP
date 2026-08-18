@@ -1,12 +1,68 @@
 from __future__ import annotations
 
+import calendar
 import tkinter as tk
+from datetime import date, datetime
 from tkinter import messagebox, ttk
 from typing import Any
 
 from modules.purchase_dashboard.purchase_dashboard_service import (
     PurchaseDashboardService,
 )
+
+
+class CalendarPopup(tk.Toplevel):
+    """외부 패키지 없이 날짜를 선택하는 작은 달력 팝업입니다."""
+
+    def __init__(self, parent: tk.Misc, target_var: tk.StringVar) -> None:
+        super().__init__(parent)
+        self.target_var = target_var
+        try:
+            selected = datetime.strptime(target_var.get(), "%Y-%m-%d").date()
+        except ValueError:
+            selected = date.today()
+        self.year = selected.year
+        self.month = selected.month
+        self.title("날짜 선택")
+        self.resizable(False, False)
+        self.transient(parent.winfo_toplevel())
+        self.grab_set()
+        self._draw()
+
+    def _draw(self) -> None:
+        for child in self.winfo_children():
+            child.destroy()
+        header = ttk.Frame(self, padding=8)
+        header.pack(fill="x")
+        ttk.Button(header, text="◀", width=3, command=lambda: self._move(-1)).pack(side="left")
+        ttk.Label(header, text=f"{self.year}년 {self.month}월", anchor="center").pack(
+            side="left", expand=True, fill="x"
+        )
+        ttk.Button(header, text="▶", width=3, command=lambda: self._move(1)).pack(side="right")
+
+        body = ttk.Frame(self, padding=(8, 0, 8, 8))
+        body.pack()
+        for column, name in enumerate(("월", "화", "수", "목", "금", "토", "일")):
+            ttk.Label(body, text=name, anchor="center", width=4).grid(row=0, column=column)
+        for row_index, week in enumerate(calendar.monthcalendar(self.year, self.month), start=1):
+            for column, day in enumerate(week):
+                if day:
+                    ttk.Button(
+                        body,
+                        text=str(day),
+                        width=4,
+                        command=lambda value=day: self._select(value),
+                    ).grid(row=row_index, column=column, padx=1, pady=1)
+
+    def _move(self, offset: int) -> None:
+        value = self.year * 12 + self.month - 1 + offset
+        self.year, month_index = divmod(value, 12)
+        self.month = month_index + 1
+        self._draw()
+
+    def _select(self, day: int) -> None:
+        self.target_var.set(date(self.year, self.month, day).isoformat())
+        self.destroy()
 
 
 class PurchaseDashboardPage(ttk.Frame):
@@ -22,19 +78,17 @@ class PurchaseDashboardPage(ttk.Frame):
         self.service = service or PurchaseDashboardService()
         self.dashboard_data: dict[str, Any] = {}
 
-        self.period_var = tk.StringVar(value="이번달")
-        self.start_date_var = tk.StringVar()
-        self.end_date_var = tk.StringVar()
+        today = date.today()
+        self.start_date_var = tk.StringVar(value=today.replace(day=1).isoformat())
+        self.end_date_var = tk.StringVar(value=today.isoformat())
         self.status_var = tk.StringVar(
             value="구매 통계를 불러오는 중입니다."
         )
 
-        self.today_count_var = tk.StringVar(value="0건")
-        self.today_amount_var = tk.StringVar(value="0원")
-        self.period_amount_var = tk.StringVar(value="0원")
-        self.supplier_count_var = tk.StringVar(value="0곳")
-        self.pending_count_var = tk.StringVar(value="0건")
-        self.average_price_var = tk.StringVar(value="0원")
+        self.order_count_var = tk.StringVar(value="0건")
+        self.sales_amount_var = tk.StringVar(value="0원")
+        self.purchase_amount_var = tk.StringVar(value="0원")
+        self.profit_amount_var = tk.StringVar(value="0원")
 
         self._build_ui()
         self.refresh()
@@ -56,7 +110,7 @@ class PurchaseDashboardPage(ttk.Frame):
 
         ttk.Label(
             frame,
-            text="구매 통계",
+            text="판매·손익 통계",
             font=("맑은 고딕", 18, "bold"),
         ).grid(row=0, column=0, sticky="w")
 
@@ -88,12 +142,10 @@ class PurchaseDashboardPage(ttk.Frame):
         frame.grid(row=1, column=0, sticky="ew")
 
         cards = [
-            ("오늘 발주", self.today_count_var),
-            ("오늘 발주금액", self.today_amount_var),
-            ("조회기간 발주금액", self.period_amount_var),
-            ("발주 공급처", self.supplier_count_var),
-            ("발주대기", self.pending_count_var),
-            ("평균 매입단가", self.average_price_var),
+            ("조회기간 주문", self.order_count_var),
+            ("조회기간 매출", self.sales_amount_var),
+            ("조회기간 매입", self.purchase_amount_var),
+            ("조회기간 순익", self.profit_amount_var),
         ]
 
         for index, (title, variable) in enumerate(cards):
@@ -130,78 +182,61 @@ class PurchaseDashboardPage(ttk.Frame):
         )
         frame.columnconfigure(7, weight=1)
 
-        ttk.Label(frame, text="기간").grid(
+        ttk.Label(frame, text="조회기간").grid(
             row=0,
             column=0,
             padx=(0, 5),
         )
 
-        self.period_combo = ttk.Combobox(
-            frame,
-            textvariable=self.period_var,
-            values=self.service.PERIODS,
-            state="readonly",
-            width=12,
-        )
-        self.period_combo.grid(
-            row=0,
-            column=1,
-            padx=(0, 14),
-        )
-        self.period_combo.bind(
-            "<<ComboboxSelected>>",
-            self._on_period_changed,
-        )
-
         ttk.Label(frame, text="시작일").grid(
             row=0,
-            column=2,
+            column=1,
             padx=(0, 5),
         )
         self.start_entry = ttk.Entry(
             frame,
             textvariable=self.start_date_var,
             width=12,
-            state="disabled",
+            state="readonly",
         )
         self.start_entry.grid(
             row=0,
-            column=3,
-            padx=(0, 12),
+            column=2,
         )
+        self.start_entry.bind("<Button-1>", lambda _event: self._open_calendar(self.start_date_var))
+        ttk.Button(
+            frame, text="📅", width=3,
+            command=lambda: self._open_calendar(self.start_date_var),
+        ).grid(row=0, column=3, padx=(3, 12))
+
+        ttk.Label(frame, text="~").grid(row=0, column=4, padx=(0, 12))
 
         ttk.Label(frame, text="종료일").grid(
             row=0,
-            column=4,
+            column=5,
             padx=(0, 5),
         )
         self.end_entry = ttk.Entry(
             frame,
             textvariable=self.end_date_var,
             width=12,
-            state="disabled",
+            state="readonly",
         )
         self.end_entry.grid(
             row=0,
-            column=5,
-            padx=(0, 12),
+            column=6,
         )
+        self.end_entry.bind("<Button-1>", lambda _event: self._open_calendar(self.end_date_var))
+        ttk.Button(
+            frame, text="📅", width=3,
+            command=lambda: self._open_calendar(self.end_date_var),
+        ).grid(row=0, column=7, padx=(3, 12))
 
         ttk.Button(
             frame,
             text="조회",
             command=self.refresh,
-        ).grid(row=0, column=6)
-
-        ttk.Label(
-            frame,
-            text="직접입력 형식: YYYY-MM-DD",
-        ).grid(
-            row=0,
-            column=7,
-            padx=(12, 0),
-            sticky="w",
-        )
+        ).grid(row=0, column=8)
 
     def _build_content_area(self) -> None:
         notebook = ttk.Notebook(self)
@@ -256,33 +291,42 @@ class PurchaseDashboardPage(ttk.Frame):
         self.product_tree = self._create_tree(
             self.product_tab,
             columns=(
-                "rank",
-                "supplier_product_code",
                 "product_name",
-                "purchase_count",
+                "order_count",
                 "total_quantity",
-                "average_unit_price",
-                "total_item_amount",
+                "sales",
+                "purchase",
+                "profit",
+                "margin_rate",
+                "unconfirmed_count",
+                "profit_status",
             ),
             headings={
-                "rank": "순위",
-                "supplier_product_code": "공급처 코드",
                 "product_name": "상품명",
-                "purchase_count": "발주횟수",
-                "total_quantity": "총수량",
-                "average_unit_price": "평균단가",
-                "total_item_amount": "총매입",
+                "order_count": "주문수",
+                "total_quantity": "판매수량",
+                "sales": "매출",
+                "purchase": "매입",
+                "profit": "순익",
+                "margin_rate": "순익률",
+                "unconfirmed_count": "미확정 주문",
+                "profit_status": "상태",
             },
             widths={
-                "rank": 65,
-                "supplier_product_code": 130,
                 "product_name": 280,
-                "purchase_count": 100,
+                "order_count": 90,
                 "total_quantity": 100,
-                "average_unit_price": 130,
-                "total_item_amount": 150,
+                "sales": 130,
+                "purchase": 130,
+                "profit": 130,
+                "margin_rate": 100,
+                "unconfirmed_count": 100,
+                "profit_status": 110,
             },
         )
+        self.product_tree.tag_configure("loss", background="#FDECEC")
+        self.product_tree.tag_configure("margin_under_5", background="#FFF0E0")
+        self.product_tree.tag_configure("margin_under_10", background="#FFF9D9")
 
         self.monthly_tree = self._create_tree(
             self.monthly_tab,
@@ -399,9 +443,8 @@ class PurchaseDashboardPage(ttk.Frame):
     def refresh(self) -> None:
         try:
             data = self.service.get_dashboard_data(
-                period_name=self.period_var.get(),
-                custom_start=self.start_date_var.get(),
-                custom_end=self.end_date_var.get(),
+                start_date=self.start_date_var.get(),
+                end_date=self.end_date_var.get(),
             )
             data["alerts"] = self.service.build_alerts(data)
             self.dashboard_data = data
@@ -419,17 +462,17 @@ class PurchaseDashboardPage(ttk.Frame):
                 )
             )
             self.status_var.set(
-                "구매 통계를 최신 데이터로 갱신했습니다."
+                "판매·손익 통계를 최신 데이터로 갱신했습니다."
             )
 
         except Exception as error:
             self.status_var.set(
-                "구매 통계를 불러오지 못했습니다."
+                "판매·손익 통계를 불러오지 못했습니다."
             )
             messagebox.showerror(
-                "구매 통계 오류",
+                "판매·손익 통계 오류",
                 (
-                    "구매 통계를 불러오는 중 "
+                    "판매·손익 통계를 불러오는 중 "
                     "오류가 발생했습니다.\n\n"
                     f"{error}"
                 ),
@@ -437,27 +480,11 @@ class PurchaseDashboardPage(ttk.Frame):
             )
 
     def _render_kpi(self) -> None:
-        summary = self.dashboard_data.get("summary") or {}
-        today = self.dashboard_data.get("today_summary") or {}
-
-        self.today_count_var.set(
-            f"{int(today.get('purchase_count') or 0):,}건"
-        )
-        self.today_amount_var.set(
-            f"{int(today.get('grand_total') or 0):,}원"
-        )
-        self.period_amount_var.set(
-            f"{int(summary.get('grand_total') or 0):,}원"
-        )
-        self.supplier_count_var.set(
-            f"{int(summary.get('supplier_count') or 0):,}곳"
-        )
-        self.pending_count_var.set(
-            f"{int(summary.get('pending_count') or 0):,}건"
-        )
-        self.average_price_var.set(
-            f"{int(float(summary.get('average_unit_price') or 0)):,}원"
-        )
+        summary = self.dashboard_data.get("sales_profit_summary") or {}
+        self.order_count_var.set(f"{int(summary.get('order_count') or 0):,}건")
+        self.sales_amount_var.set(f"{int(summary.get('sales') or 0):,}원")
+        self.purchase_amount_var.set(f"{int(summary.get('purchase') or 0):,}원")
+        self.profit_amount_var.set(f"{int(summary.get('profit') or 0):,}원")
 
     def _render_supplier_ranking(self) -> None:
         self.supplier_tree.delete(
@@ -487,23 +514,61 @@ class PurchaseDashboardPage(ttk.Frame):
             *self.product_tree.get_children()
         )
 
-        for rank, row in enumerate(
-            self.dashboard_data.get("product_ranking") or [],
-            start=1,
-        ):
+        for row in self.dashboard_data.get("product_ranking") or []:
+            confirmed = bool(row.get("is_confirmed"))
+            unconfirmed_count = int(row.get("unconfirmed_count") or 0)
+            tag = ""
+            if confirmed and unconfirmed_count == 0:
+                tag = self._profit_color_tag(
+                    row.get("sales"),
+                    row.get("profit"),
+                )
             self.product_tree.insert(
                 "",
                 "end",
                 values=(
-                    rank,
-                    row.get("supplier_product_code") or "",
                     row.get("product_name") or "",
-                    f"{int(row.get('purchase_count') or 0):,}회",
+                    f"{int(row.get('order_count') or 0):,}건",
                     f"{int(row.get('total_quantity') or 0):,}",
-                    f"{int(float(row.get('average_unit_price') or 0)):,}원",
-                    f"{int(row.get('total_item_amount') or 0):,}원",
+                    f"{int(row.get('sales') or 0):,}원",
+                    (
+                        f"{int(row.get('purchase') or 0):,}원"
+                        if confirmed else "미확정"
+                    ),
+                    (
+                        f"{int(row.get('profit') or 0):,}원"
+                        if confirmed else "미확정"
+                    ),
+                    (
+                        f"{float(row.get('margin_rate')):.2f}%"
+                        if confirmed else "미확정"
+                    ),
+                    f"{unconfirmed_count:,}건",
+                    (
+                        "부분 미확정"
+                        if confirmed and unconfirmed_count > 0
+                        else "확정" if confirmed else "미확정"
+                    ),
                 ),
+                tags=((tag,) if tag else ()),
             )
+
+    @staticmethod
+    def _profit_color_tag(sales: Any, profit: Any) -> str:
+        if sales is None or profit is None:
+            return ""
+        sales_value = float(sales)
+        profit_value = float(profit)
+        if sales_value <= 0:
+            return ""
+        if profit_value < 0:
+            return "loss"
+        margin_rate = profit_value / sales_value * 100
+        if margin_rate < 5:
+            return "margin_under_5"
+        if margin_rate < 10:
+            return "margin_under_10"
+        return ""
 
     def _render_monthly_statistics(self) -> None:
         self.monthly_tree.delete(
@@ -557,17 +622,5 @@ class PurchaseDashboardPage(ttk.Frame):
                 ),
             )
 
-    def _on_period_changed(
-        self,
-        event: tk.Event | None = None,
-    ) -> None:
-        custom = self.period_var.get() == "직접입력"
-        state = "normal" if custom else "disabled"
-
-        self.start_entry.configure(state=state)
-        self.end_entry.configure(state=state)
-
-        if not custom:
-            self.start_date_var.set("")
-            self.end_date_var.set("")
-            self.refresh()
+    def _open_calendar(self, target_var: tk.StringVar) -> None:
+        CalendarPopup(self, target_var)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import sqlite3
 from time import perf_counter
 from dataclasses import dataclass
@@ -13,10 +14,26 @@ from .notion_api_client import NotionAPIClient, NotionResource
 from .notion_sync_service import NotionSyncService
 
 
+def normalize_purchase_deadline(value: Any) -> str | None:
+    """Normalize a Notion product deadline without applying supplier defaults."""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    match = re.fullmatch(r"(\d{1,2})(?::(\d{1,2})(?::\d{1,2})?|시(?:\s*(\d{1,2})\s*분?)?)", text)
+    if not match:
+        return None
+    hour = int(match.group(1))
+    minute = int(match.group(2) or match.group(3) or 0)
+    if hour > 23 or minute > 59:
+        return None
+    return f"{hour:02d}:{minute:02d}"
+
+
 @dataclass
 class LivePreview:
     suppliers: list[dict[str, Any]]
     products: list[dict[str, Any]]
+    shipping_policies: list[dict[str, Any]]
     warnings: list[str]
     resources: dict[str, NotionResource]
 
@@ -35,6 +52,9 @@ class NotionLiveSyncService:
         "purchases": ("발주 DB", "발주DB", "발주 관리", "발주관리", "발주"),
         "conditions": (
             "공급처 상품조건 DB", "공급처상품조건 DB", "상품조건 DB", "상품 옵션 DB", "상품옵션 DB",
+        ),
+        "shipping_policies": (
+            "상품 배송정책", "상품배송정책", "배송정책", "상품 배송 정책", "배송 정책",
         ),
         "mappings": ("상품매핑 DB", "상품 매핑 DB", "상품매핑관리", "상품 매핑 관리"),
         "channels": ("판매채널 DB", "판매 채널 DB", "판매채널관리", "판매 채널 관리"),
@@ -104,9 +124,16 @@ class NotionLiveSyncService:
             if supplier_name and supplier_name not in supplier_names:
                 warnings.append(f"상품 '{product['product_name']}'의 공급처 '{supplier_name}'가 공급처 DB에 없습니다.")
 
+        shipping_rows = (
+            client.query_data_source(resources["shipping_policies"].resource_id)
+            if "shipping_policies" in resources else []
+        )
+        shipping_policies = [self._shipping_policy_from_page(page) for page in shipping_rows]
+
         return LivePreview(
             suppliers=suppliers,
             products=products,
+            shipping_policies=shipping_policies,
             warnings=warnings,
             resources=resources,
         )
@@ -120,6 +147,9 @@ class NotionLiveSyncService:
             "product_updated": 0,
             "condition_created": 0,
             "condition_updated": 0,
+            "shipping_policy_created": 0,
+            "shipping_policy_updated": 0,
+            "shipping_policy_deactivated": 0,
             "supplier_deactivated": 0,
             "product_deactivated": 0,
             "condition_deactivated": 0,
@@ -139,6 +169,11 @@ class NotionLiveSyncService:
                 active_product_page_ids = {
                     str(row.get("notion_page_id") or "").strip()
                     for row in preview.products
+                    if str(row.get("notion_page_id") or "").strip()
+                }
+                active_shipping_page_ids = {
+                    str(row.get("notion_page_id") or "").strip()
+                    for row in getattr(preview, "shipping_policies", [])
                     if str(row.get("notion_page_id") or "").strip()
                 }
 
@@ -193,11 +228,83 @@ class NotionLiveSyncService:
                             else "condition_updated"
                         ] += 1
 
+                # Upsert shipping policies from Notion (상품 배송정책)
+                for row in getattr(preview, "shipping_policies", []):
+                    rels = row.get("product_relation") or []
+                    if not rels:
+                        preview.warnings.append(
+                            f"Shipping policy {row.get('notion_page_id')} has no product relation; skipped."
+                        )
+                        continue
+
+                    for rel in rels:
+                        product_page_id = str(rel)
+                        product_row = connection.execute(
+                            "SELECT id FROM products WHERE notion_page_id=?",
+                            (product_page_id,),
+                        ).fetchone()
+                        if not product_row:
+                            preview.warnings.append(
+                                f"Shipping policy {row.get('notion_page_id')} product relation {product_page_id} not found in ERP; skipped."
+                            )
+                            continue
+                        product_id = int(product_row["id"])
+
+                        existing = connection.execute(
+                            "SELECT id FROM product_shipping_policies WHERE notion_page_id=? AND product_id=?",
+                            (row.get("notion_page_id"), product_id),
+                        ).fetchone()
+
+                        if existing:
+                            connection.execute(
+                                """
+                                UPDATE product_shipping_policies
+                                SET product_id=?, policy_name=?, min_quantity=?, max_quantity=?,
+                                    shipping_fee=?, shipping_type=COALESCE(?, shipping_type), is_active=?, memo=?, notion_last_edited_time=?, updated_at=CURRENT_TIMESTAMP
+                                WHERE id=?
+                                """,
+                                (
+                                    product_id,
+                                    row.get("policy_name") or "",
+                                    int(row.get("min_quantity") or 0),
+                                    (row.get("max_quantity") if row.get("max_quantity") not in (None, "") else None),
+                                    int(row.get("shipping_fee") or 0),
+                                    row.get("shipping_type") or None,
+                                    1 if row.get("is_active") else 0,
+                                    row.get("memo") or "",
+                                    row.get("notion_last_edited_time") or "",
+                                    int(existing["id"]),
+                                ),
+                            )
+                            counters["shipping_policy_updated"] += 1
+                        else:
+                            connection.execute(
+                                """
+                                INSERT INTO product_shipping_policies
+                                    (product_id, policy_name, min_quantity, max_quantity, shipping_fee, shipping_type, is_active, memo, notion_page_id, notion_last_edited_time)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                """,
+                                (
+                                    product_id,
+                                    row.get("policy_name") or "",
+                                    int(row.get("min_quantity") or 0),
+                                    (row.get("max_quantity") if row.get("max_quantity") not in (None, "") else None),
+                                    int(row.get("shipping_fee") or 0),
+                                    row.get("shipping_type") or "구간형",
+                                    1 if row.get("is_active") else 0,
+                                    row.get("memo") or "",
+                                    row.get("notion_page_id") or "",
+                                    row.get("notion_last_edited_time") or "",
+                                ),
+                            )
+                            counters["shipping_policy_created"] += 1
+
                 counters.update(
                     self._deactivate_missing_notion_rows(
                         connection,
                         active_supplier_page_ids=active_supplier_page_ids,
                         active_product_page_ids=active_product_page_ids,
+                        active_shipping_page_ids=active_shipping_page_ids,
                     )
                 )
 
@@ -322,6 +429,7 @@ class NotionLiveSyncService:
         *,
         active_supplier_page_ids: set[str],
         active_product_page_ids: set[str],
+        active_shipping_page_ids: set[str] | None = None,
     ) -> dict[str, int]:
         """
         Notion에서 더 이상 조회되지 않는 기존 Notion 연동 데이터를 삭제하지 않고
@@ -419,6 +527,38 @@ class NotionLiveSyncService:
                 missing_product_ids,
             )
             condition_count += max(0, int(cursor.rowcount or 0))
+
+        # Deactivate product_shipping_policies that are no longer present in Notion
+        shipping_count = 0
+        if active_shipping_page_ids is None:
+            active_shipping_page_ids = set()
+        shipping_rows = connection.execute(
+            """
+            SELECT id, notion_page_id
+            FROM product_shipping_policies
+            WHERE COALESCE(notion_page_id, '') <> ''
+              AND is_active = 1
+            """
+        ).fetchall()
+
+        missing_shipping_ids = [
+            int(row["id"])
+            for row in shipping_rows
+            if str(row["notion_page_id"] or "").strip() not in (active_shipping_page_ids or set())
+        ]
+
+        if missing_shipping_ids:
+            placeholders = ",".join("?" for _ in missing_shipping_ids)
+            cursor = connection.execute(
+                f"""
+                UPDATE product_shipping_policies
+                SET is_active = 0,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id IN ({placeholders})
+                """,
+                missing_shipping_ids,
+            )
+            shipping_count = max(0, int(cursor.rowcount or 0))
 
         return {
             "supplier_deactivated": supplier_count,
@@ -523,8 +663,34 @@ class NotionLiveSyncService:
             "supplier_name": supplier_name.strip(),
             "purchase_price": self._to_int(self._value(p, "원가", "매입단가")),
             "courier_name": str(self._value(p, "택배사", "기본택배사") or "").strip(),
-            "order_deadline": str(self._value(p, "발주마감") or "").strip(),
+            "purchase_deadline": normalize_purchase_deadline(self._value(p, "발주마감")),
             "supplier_product_name": str(self._value(p, "공급처상품명") or product_name).strip(),
+            "notion_page_id": str(page.get("id") or ""),
+            "notion_last_edited_time": str(page.get("last_edited_time") or ""),
+        }
+
+    def _shipping_policy_from_page(self, page: dict[str, Any]) -> dict[str, Any]:
+        p = self._properties(page)
+        relation = self._value(p, "상품")
+        relation_ids = relation if isinstance(relation, list) else []
+
+        def _opt_int(val: Any):
+            if val in (None, ""):
+                return None
+            try:
+                return int(float(val))
+            except Exception:
+                return None
+
+        return {
+            "policy_name": str(self._value(p, "정책명", "이름", "Name") or "").strip(),
+            "product_relation": relation_ids,
+            "min_quantity": self._to_int(self._value(p, "최소수량", "min")),
+            "max_quantity": _opt_int(self._value(p, "최대수량", "max")),
+            "shipping_fee": self._to_int(self._value(p, "배송비", "배송 비용", "shipping_fee")),
+            "shipping_type": str(self._value(p, "배송비유형", "배송비 유형", "배송 유형", "shipping_type") or "구간형").strip(),
+            "is_active": self._to_active(self._value(p, "적용여부", "적용", "is_active"), True),
+            "memo": str(self._value(p, "메모", "비고") or "").strip(),
             "notion_page_id": str(page.get("id") or ""),
             "notion_last_edited_time": str(page.get("last_edited_time") or ""),
         }
@@ -606,6 +772,7 @@ class NotionLiveSyncService:
                 UPDATE products SET product_code=?, product_name=?, sale_price=?, category=?,
                     sale_unit=?, season=?, origin=?, packaging_type=?, sales_status=?, is_active=?,
                     supplier_id=COALESCE(?, supplier_id), purchase_price=?, supplier_product_name=?,
+                    purchase_deadline=?,
                     notion_page_id=COALESCE(NULLIF(?, ''), notion_page_id),
                     notion_last_edited_time=?, updated_at=CURRENT_TIMESTAMP
                 WHERE id=?
@@ -615,6 +782,7 @@ class NotionLiveSyncService:
                     row["season"], row["origin"], row["packaging_type"], row["sales_status"],
                     1 if row["sales_status"] == "판매중" else 0, supplier_id,
                     row["purchase_price"], row["supplier_product_name"],
+                    row["purchase_deadline"],
                     row.get("notion_page_id", ""), row.get("notion_last_edited_time", ""),
                     existing["id"],
                 ),
@@ -626,8 +794,8 @@ class NotionLiveSyncService:
                 product_code, product_name, supplier_id, supplier_product_name,
                 purchase_price, sale_price, category, sale_unit, season, origin,
                 packaging_type, sales_status, is_active, notion_page_id,
-                notion_last_edited_time
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                notion_last_edited_time, purchase_deadline
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 code, row["product_name"], supplier_id, row["supplier_product_name"],
@@ -635,6 +803,7 @@ class NotionLiveSyncService:
                 row["season"], row["origin"], row["packaging_type"], row["sales_status"],
                 1 if row["sales_status"] == "판매중" else 0,
                 row.get("notion_page_id", ""), row.get("notion_last_edited_time", ""),
+                row["purchase_deadline"],
             ),
         )
         return int(cursor.lastrowid), True
@@ -642,6 +811,12 @@ class NotionLiveSyncService:
     def _upsert_condition(
         self, c: sqlite3.Connection, product_id: int, supplier_id: int, row: dict[str, Any]
     ) -> bool:
+        self._upsert_product_supplier_price(
+            c,
+            product_id,
+            supplier_id,
+            row,
+        )
         existing = c.execute(
             "SELECT id FROM supplier_product_conditions WHERE product_id=? AND supplier_id=?",
             (product_id, supplier_id),
@@ -656,7 +831,7 @@ class NotionLiveSyncService:
                 """,
                 (
                     row["supplier_product_name"], row["purchase_price"], row["courier_name"],
-                    row["order_deadline"], row.get("notion_page_id", ""),
+                    row["purchase_deadline"] or "", row.get("notion_page_id", ""),
                     row.get("notion_last_edited_time", ""), existing["id"],
                 ),
             )
@@ -671,8 +846,39 @@ class NotionLiveSyncService:
             """,
             (
                 product_id, supplier_id, row["supplier_product_name"], row["purchase_price"],
-                row["courier_name"], row["order_deadline"], row.get("notion_page_id", ""),
+                row["courier_name"], row["purchase_deadline"] or "", row.get("notion_page_id", ""),
                 row.get("notion_last_edited_time", ""),
             ),
         )
         return True
+
+    @staticmethod
+    def _upsert_product_supplier_price(
+        c: sqlite3.Connection,
+        product_id: int,
+        supplier_id: int,
+        row: dict[str, Any],
+    ) -> None:
+        c.execute(
+            """
+            INSERT INTO product_suppliers (
+                product_id,
+                supplier_id,
+                supplier_product_name,
+                purchase_price,
+                order_deadline,
+                is_default,
+                is_active
+            ) VALUES (?, ?, ?, ?, ?, 1, 1)
+            ON CONFLICT(product_id, supplier_id) DO UPDATE SET
+                purchase_price=excluded.purchase_price,
+                updated_at=CURRENT_TIMESTAMP
+            """,
+            (
+                product_id,
+                supplier_id,
+                row.get("supplier_product_name") or "",
+                int(row.get("purchase_price") or 0),
+                row.get("purchase_deadline") or "14:00",
+            ),
+        )

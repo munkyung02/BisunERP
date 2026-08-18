@@ -40,12 +40,6 @@ class DashboardService:
         all_orders = self._safe_call(
             self.order_repository.get_orders, [], "전체 주문", errors
         )
-        purchase_counts = self._safe_call(
-            self.purchase_repository.get_purchase_status_counts,
-            {},
-            "발주 집계",
-            errors,
-        )
         supplier_summary = self._safe_call(
             self.purchase_repository.get_supplier_summary,
             [],
@@ -70,8 +64,6 @@ class DashboardService:
         ]
         today_sales = sum(self._to_int(order.get("total_amount")) for order in today_orders)
         today_count = self._to_int(order_counts.get("today_count")) or len(today_orders)
-        average_order = int(today_sales / today_count) if today_count else 0
-
         shipment_counts = self._count_shipments(
             shipments
         )
@@ -81,13 +73,7 @@ class DashboardService:
         )
 
         purchase_waiting = self._to_int(
-            purchase_counts.get(
-                "발주대기",
-                order_counts.get(
-                    "purchase_waiting_count",
-                    0,
-                ),
-            )
+            order_counts.get("purchase_waiting_count", 0)
         )
 
         shipment_waiting = self._to_int(
@@ -105,6 +91,7 @@ class DashboardService:
         profit_summary = self._safe_call(
             self.settlement_service.get_dashboard_profit, {}, "정산 집계", errors
         )
+        today_sales = self._to_int(profit_summary.get("today_sales", today_sales))
         intelligence, sales_intelligence = self._get_operations_intelligence(errors)
 
         seven_days = self._build_seven_day_stats(all_orders)
@@ -126,7 +113,9 @@ class DashboardService:
             "summary": {
                 "today_orders": today_count,
                 "today_sales": today_sales,
-                "average_order": average_order,
+                "today_purchase": self._to_int(
+                    profit_summary.get("today_purchase")
+                ),
                 "total_orders": self._to_int(order_counts.get("total_count")) or len(all_orders),
                 "unmapped": unmapped,
                 "purchase_waiting": purchase_waiting,

@@ -30,8 +30,12 @@ class LotteOnOrderExcelParser(BaseOrderExcelParser):
     required_columns = set(source_headers)
 
     def find_header_row(self, dataframe: pd.DataFrame) -> int | None:
-        """Accept only the verified 57-column 배송관리 header sequence."""
-        expected = list(self.source_headers)
+        """Accept the verified 57- and 58-column 배송관리 header sequences."""
+        legacy_headers = list(self.source_headers)
+        extended_headers = list(legacy_headers)
+        customs_index = extended_headers.index("개인통관번호") + 1
+        extended_headers.insert(customs_index, "해외배송인증번호")
+        accepted_headers = (legacy_headers, extended_headers)
         max_rows = min(len(dataframe), self.header_search_rows)
         for row_index in range(max_rows):
             values = [
@@ -40,7 +44,7 @@ class LotteOnOrderExcelParser(BaseOrderExcelParser):
             ]
             while values and not values[-1]:
                 values.pop()
-            if values == expected:
+            if values in accepted_headers:
                 return row_index
         return None
 

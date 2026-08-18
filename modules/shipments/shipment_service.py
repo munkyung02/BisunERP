@@ -133,7 +133,9 @@ class ShipmentService:
                 int(supplier["id"])
             )
 
-        if mapping is not None:
+        if str(supplier_name).strip() == "푸드대통령":
+            parser = get_supplier_parser(supplier_name)
+        elif mapping is not None:
             parser = ConfigurableShipmentParser(
                 supplier_name=str(supplier["supplier_name"]),
                 header_row=int(mapping["header_row"]),
@@ -359,6 +361,66 @@ class ShipmentService:
             "errors": errors,
             **coupang_result,
         }
+
+    def get_manual_shipment_candidates(
+        self,
+        supplier_name: str,
+    ) -> list[dict[str, Any]]:
+        return self.shipment_repository.get_manual_shipment_candidates(
+            supplier_name
+        )
+
+    def get_standard_carriers(self) -> tuple[str, ...]:
+        return BaseShipmentParser.standard_carriers()
+
+    def save_manual_shipments(
+        self,
+        rows: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """직접입력을 기존 매칭 송장 저장 경로로 전달합니다."""
+        normalized: list[tuple[dict[str, Any], str, str]] = []
+        seen_tracking: set[str] = set()
+        for row in rows:
+            tracking = BaseShipmentParser.clean_tracking_number(
+                row.get("tracking_number")
+            )
+            carrier = BaseShipmentParser.normalize_carrier(row.get("carrier"))
+            if not tracking:
+                continue
+            if not carrier:
+                raise ValueError("송장번호가 입력된 행의 택배사를 선택해 주세요.")
+            if tracking in seen_tracking:
+                raise ValueError(f"동일 송장번호가 중복 입력되었습니다: {tracking}")
+            if self.shipment_repository.shipment_exists(tracking):
+                raise ValueError(f"이미 ERP에 등록된 송장번호입니다: {tracking}")
+            candidate = self.shipment_repository.get_manual_shipment_candidate(
+                int(row["purchase_order_id"])
+            )
+            if candidate is None:
+                raise ValueError(
+                    "창을 연 뒤 발주 또는 송장 상태가 변경된 항목이 있습니다. "
+                    "목록을 새로고침해 주세요."
+                )
+            normalized.append((candidate, carrier, tracking))
+            seen_tracking.add(tracking)
+
+        if not normalized:
+            raise ValueError("송장번호가 입력된 행이 없습니다.")
+
+        match_results = [
+            {
+                "status": "matched",
+                "shipment": {
+                    "carrier": carrier,
+                    "tracking_number": tracking,
+                    "excel_row": None,
+                },
+                "candidate": candidate,
+                "items": [candidate],
+            }
+            for candidate, carrier, tracking in normalized
+        ]
+        return self.save_matched_shipments(match_results)
 
     def preview_simple_shipment_file(
         self,

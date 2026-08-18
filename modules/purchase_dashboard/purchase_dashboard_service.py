@@ -8,6 +8,7 @@ from typing import Any
 from modules.purchase_dashboard.purchase_dashboard_repository import (
     PurchaseDashboardRepository,
 )
+from modules.settlements.settlement_service import SettlementService
 
 
 class PurchaseDashboardService:
@@ -27,8 +28,12 @@ class PurchaseDashboardService:
         self,
         repository: PurchaseDashboardRepository | None = None,
         database_path: str | Path | None = None,
+        settlement_service: SettlementService | None = None,
     ) -> None:
         self.repository = repository or PurchaseDashboardRepository(
+            database_path=database_path
+        )
+        self.settlement_service = settlement_service or SettlementService(
             database_path=database_path
         )
 
@@ -92,24 +97,34 @@ class PurchaseDashboardService:
     def get_dashboard_data(
         self,
         *,
-        period_name: str,
-        custom_start: str | None = None,
-        custom_end: str | None = None,
+        start_date: str,
+        end_date: str,
     ) -> dict[str, Any]:
-        start_date, end_date = self.resolve_period(
-            period_name,
-            custom_start=custom_start,
-            custom_end=custom_end,
+        start = self.parse_date(start_date)
+        end = self.parse_date(end_date)
+        if start > end:
+            raise ValueError("조회 시작일은 종료일보다 늦을 수 없습니다.")
+        start_date = start.isoformat()
+        end_date = end.isoformat()
+        profit_summary = self.settlement_service.get_dashboard_period_summary(
+            start_date,
+            end_date,
         )
 
         return {
             "start_date": start_date,
             "end_date": end_date,
+            "sales_profit_summary": {
+                "order_count": self.repository.get_order_count(
+                    start_date=start_date,
+                    end_date=end_date,
+                ),
+                **profit_summary,
+            },
             "summary": self.repository.get_kpi_summary(
                 start_date=start_date,
                 end_date=end_date,
             ),
-            "today_summary": self.repository.get_today_summary(),
             "supplier_ranking": (
                 self.repository.get_supplier_ranking(
                     start_date=start_date,
@@ -118,15 +133,16 @@ class PurchaseDashboardService:
                 )
             ),
             "product_ranking": (
-                self.repository.get_product_ranking(
-                    start_date=start_date,
-                    end_date=end_date,
+                self.settlement_service.get_product_profit_summary(
+                    start_date,
+                    end_date,
                     limit=20,
                 )
             ),
             "monthly_statistics": (
                 self.repository.get_monthly_statistics(
-                    months=12
+                    start_date=start_date,
+                    end_date=end_date,
                 )
             ),
             "inactive_suppliers": (

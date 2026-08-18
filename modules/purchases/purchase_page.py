@@ -10,8 +10,112 @@ from typing import Any
 from modules.purchases.purchase_service import PurchaseService
 
 
+class DeadlinePurchaseConfirmDialog(tk.Toplevel):
+    """시간대별 발주 대상의 최종 수동 확인 창입니다."""
+
+    @staticmethod
+    def summarize_candidates(
+        candidates: list[dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], int, int]:
+        grouped: dict[int, dict[str, Any]] = {}
+        for item in candidates:
+            supplier_id = int(item["supplier_id"])
+            bucket = grouped.setdefault(
+                supplier_id,
+                {
+                    "supplier_name": str(item.get("supplier_name") or ""),
+                    "count": 0,
+                    "quantity": 0,
+                    "amount": 0,
+                },
+            )
+            bucket["count"] += 1
+            bucket["quantity"] += int(
+                item.get("purchase_quantity") or item.get("quantity") or 0
+            )
+            bucket["amount"] += int(item.get("item_amount") or 0)
+        rows = sorted(grouped.values(), key=lambda value: value["supplier_name"])
+        return (
+            rows,
+            sum(int(row["quantity"]) for row in rows),
+            sum(int(row["amount"]) for row in rows),
+        )
+
+    def __init__(
+        self,
+        parent: tk.Misc,
+        deadline: str,
+        candidates: list[dict[str, Any]],
+    ) -> None:
+        super().__init__(parent)
+        self.result = False
+        self.title(f"{deadline} 발주 대상 확인")
+        self.transient(parent.winfo_toplevel())
+        self.grab_set()
+        self.resizable(True, True)
+
+        supplier_rows, total_quantity, total_amount = self.summarize_candidates(candidates)
+        summary = ttk.LabelFrame(self, text="발주 요약", padding=12)
+        summary.pack(fill="x", padx=16, pady=(16, 8))
+        ttk.Label(
+            summary,
+            text=(
+                f"발주마감: {deadline}    공급처: {len(supplier_rows):,}곳    "
+                f"주문상품: {len(candidates):,}건    총 수량: {total_quantity:,}개    "
+                f"총 상품금액: {total_amount:,}원"
+            ),
+            font=("맑은 고딕", 10, "bold"),
+        ).pack(anchor="w")
+
+        tree = ttk.Treeview(
+            self,
+            columns=("supplier", "count", "quantity", "amount"),
+            show="headings",
+            height=max(4, min(12, len(supplier_rows))),
+        )
+        for column, text, width, anchor in (
+            ("supplier", "공급처", 220, "w"),
+            ("count", "건수", 90, "center"),
+            ("quantity", "수량", 100, "center"),
+            ("amount", "금액", 140, "e"),
+        ):
+            tree.heading(column, text=text)
+            tree.column(column, width=width, anchor=anchor)
+        for row in supplier_rows:
+            tree.insert(
+                "",
+                "end",
+                values=(
+                    row["supplier_name"],
+                    f"{int(row['count']):,}건",
+                    f"{int(row['quantity']):,}개",
+                    f"{int(row['amount']):,}원",
+                ),
+            )
+        tree.pack(fill="both", expand=True, padx=16, pady=8)
+
+        buttons = ttk.Frame(self, padding=(16, 8, 16, 16))
+        buttons.pack(fill="x")
+        ttk.Button(buttons, text="취소", command=self.destroy).pack(side="right")
+        ttk.Button(
+            buttons,
+            text=f"{deadline} 발주서 생성",
+            command=self._confirm,
+        ).pack(side="right", padx=(0, 8))
+        self.protocol("WM_DELETE_WINDOW", self.destroy)
+        self.wait_visibility()
+        self.focus_set()
+        self.wait_window(self)
+
+    def _confirm(self) -> None:
+        self.result = True
+        self.destroy()
+
+
 class PurchasePage(ttk.Frame):
     """발주대기 및 발주완료 내역을 관리하는 화면입니다."""
+
+    PURCHASE_DEADLINES = ("09:00", "09:30", "12:00", "13:00", "14:00")
 
     def __init__(
         self,
@@ -37,6 +141,8 @@ class PurchasePage(ttk.Frame):
         self.kpi_today_var = tk.StringVar(value="0건")
         self.kpi_total_var = tk.StringVar(value="0건")
         self.kpi_supplier_var = tk.StringVar(value="0곳")
+        self.deadline_warning_var = tk.StringVar(value="발주마감시간 확인 중")
+        self.deadline_buttons: dict[str, ttk.Button] = {}
 
         self._build_ui()
         self.history_period_combo.configure(state="disabled")
@@ -44,10 +150,11 @@ class PurchasePage(ttk.Frame):
 
     def _build_ui(self) -> None:
         self.columnconfigure(0, weight=1)
-        self.rowconfigure(4, weight=1)
+        self.rowconfigure(5, weight=1)
 
         self._build_header()
         self._build_kpi_area()
+        self._build_deadline_area()
         self._build_filter_area()
         self._build_supplier_center()
         self._build_tree_area()
@@ -118,6 +225,41 @@ class PurchasePage(ttk.Frame):
                 font=("맑은 고딕", 15, "bold"),
             ).pack(anchor="w")
 
+    def _build_deadline_area(self) -> None:
+        frame = ttk.LabelFrame(
+            self,
+            text="발주 마감시간",
+            padding=12,
+        )
+        frame.grid(row=2, column=0, padx=20, pady=(0, 10), sticky="ew")
+        frame.columnconfigure(len(self.PURCHASE_DEADLINES), weight=1)
+
+        for column, deadline in enumerate(self.PURCHASE_DEADLINES):
+            button = ttk.Button(
+                frame,
+                text=f"{deadline} 발주 (0건)",
+                command=lambda value=deadline: self.create_deadline_purchase_files(value),
+            )
+            button.grid(row=0, column=column, padx=(0, 8), sticky="w")
+            self.deadline_buttons[deadline] = button
+
+        self.deadline_warning_label = tk.Label(
+            frame,
+            textvariable=self.deadline_warning_var,
+            anchor="w",
+            fg="#9A3412",
+            bg="#FFF7ED",
+            padx=10,
+            pady=6,
+        )
+        self.deadline_warning_label.grid(
+            row=1,
+            column=0,
+            columnspan=len(self.PURCHASE_DEADLINES) + 1,
+            pady=(10, 0),
+            sticky="ew",
+        )
+
     def _build_filter_area(self) -> None:
         frame = ttk.LabelFrame(
             self,
@@ -125,7 +267,7 @@ class PurchasePage(ttk.Frame):
             padding=12,
         )
         frame.grid(
-            row=2,
+            row=3,
             column=0,
             padx=20,
             pady=(0, 10),
@@ -188,7 +330,7 @@ class PurchasePage(ttk.Frame):
             padding=10,
         )
         frame.grid(
-            row=3,
+            row=4,
             column=0,
             padx=20,
             pady=(0, 10),
@@ -261,7 +403,7 @@ class PurchasePage(ttk.Frame):
 
     def _build_tree_area(self) -> None:
         frame = ttk.Frame(self, padding=(20, 0, 20, 0))
-        frame.grid(row=4, column=0, sticky="nsew")
+        frame.grid(row=5, column=0, sticky="nsew")
         frame.columnconfigure(0, weight=1)
         frame.rowconfigure(0, weight=1)
 
@@ -363,7 +505,7 @@ class PurchasePage(ttk.Frame):
 
     def _build_bottom_area(self) -> None:
         frame = ttk.Frame(self, padding=(20, 12, 20, 18))
-        frame.grid(row=5, column=0, sticky="ew")
+        frame.grid(row=6, column=0, sticky="ew")
         frame.columnconfigure(0, weight=1)
 
         ttk.Label(
@@ -400,6 +542,7 @@ class PurchasePage(ttk.Frame):
             self._update_kpi()
             self._refresh_supplier_filter()
             self._render_supplier_center()
+            self._refresh_deadline_area()
             self._render_tree()
         except Exception as error:
             self.status_var.set("발주 데이터를 불러오지 못했습니다.")
@@ -408,6 +551,77 @@ class PurchasePage(ttk.Frame):
                 f"발주 데이터를 불러오는 중 오류가 발생했습니다.\n\n{error}",
                 parent=self,
             )
+
+    def _refresh_deadline_area(self) -> None:
+        pending_mode = self.view_mode_var.get() == "발주대기"
+        counts = {deadline: 0 for deadline in self.PURCHASE_DEADLINES}
+        missing: list[dict[str, Any]] = []
+        for item in self.candidates:
+            deadline = item.get("normalized_purchase_deadline")
+            if deadline in counts:
+                counts[str(deadline)] += 1
+            elif deadline is None:
+                missing.append(item)
+
+        for deadline, button in self.deadline_buttons.items():
+            count = counts[deadline]
+            button.configure(
+                text=f"{deadline} 발주 ({count:,}건)",
+                state="normal" if pending_mode and count > 0 else "disabled",
+            )
+
+        if missing:
+            names: list[str] = []
+            for item in missing:
+                name = str(
+                    item.get("supplier_product_name")
+                    or item.get("product_name")
+                    or item.get("platform_product_name")
+                    or "상품명 없음"
+                ).strip()
+                if name and name not in names:
+                    names.append(name)
+            example = names[0] if names else "상품명 없음"
+            suffix = f" 외 {len(names) - 1:,}개 상품" if len(names) > 1 else ""
+            self.deadline_warning_var.set(
+                f"⚠ 발주마감시간 미설정/오류 {len(missing):,}건 — {example}{suffix}"
+            )
+            self.deadline_warning_label.configure(fg="#9A3412", bg="#FFF7ED")
+        else:
+            self.deadline_warning_var.set("발주마감시간 미설정 없음")
+            self.deadline_warning_label.configure(fg="#166534", bg="#F0FDF4")
+
+    def create_deadline_purchase_files(self, deadline: str) -> None:
+        if self.view_mode_var.get() != "발주대기":
+            return
+        try:
+            candidates = self.purchase_service.get_purchase_candidates_by_deadline(deadline)
+        except Exception as error:
+            messagebox.showerror(
+                "시간대별 발주 조회 오류",
+                str(error),
+                parent=self,
+            )
+            return
+        if not candidates:
+            messagebox.showinfo(
+                f"{deadline} 발주",
+                "현재 발주 가능한 미발주 주문상품이 없습니다.",
+                parent=self,
+            )
+            self.refresh()
+            return
+
+        validation = self._validate_before_purchase(candidates)
+        if validation is None:
+            return
+        dialog = DeadlinePurchaseConfirmDialog(self, deadline, candidates)
+        if not dialog.result:
+            return
+        self._execute_purchase([
+            int(item["order_item_id"])
+            for item in candidates
+        ])
 
     def _update_kpi(self) -> None:
         summary = self.purchase_service.get_dashboard_summary()
@@ -792,6 +1006,8 @@ class PurchasePage(ttk.Frame):
         try:
             self.create_button.configure(state="disabled")
             self.selected_button.configure(state="disabled")
+            for button in self.deadline_buttons.values():
+                button.configure(state="disabled")
             self.status_var.set("발주서를 생성하고 있습니다.")
             self.update_idletasks()
 
@@ -836,6 +1052,7 @@ class PurchasePage(ttk.Frame):
             if self.view_mode_var.get() == "발주대기":
                 self.create_button.configure(state="normal")
                 self.selected_button.configure(state="normal")
+            self._refresh_deadline_area()
 
     def open_purchase_folder(self) -> None:
         folder_path = Path(self.purchase_service.output_root)
@@ -915,6 +1132,7 @@ class PurchasePage(ttk.Frame):
             state="readonly" if self.view_mode_var.get() == "발주완료" else "disabled"
         )
         self._render_supplier_center()
+        self._refresh_deadline_area()
         self._render_tree()
 
     def _on_filter_changed(

@@ -32,12 +32,16 @@ class Database:
             self._migrate_products_table(connection)
             self._create_supplier_product_conditions_table(connection)
             self._migrate_supplier_product_conditions_table(connection)
+            self._create_product_shipping_policies_table(connection)
+            self._migrate_product_shipping_policies_table(connection)
             self._create_notion_sync_logs_table(connection)
             self._migrate_notion_sync_logs_table(connection)
             self._create_customers_table(connection)
             self._create_orders_table(connection)
             self._create_order_items_table(connection)
+            self._migrate_order_items_table(connection)
             self._create_purchase_orders_table(connection)
+            self._migrate_purchase_orders_table(connection)
             self._create_payments_table(connection)
             self._create_shipments_table(connection)
             self._migrate_shipments_table(connection)
@@ -163,6 +167,103 @@ class Database:
             )
             """
         )
+
+    def _create_product_shipping_policies_table(
+        self, connection: sqlite3.Connection
+    ) -> None:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS product_shipping_policies (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                product_id INTEGER NOT NULL,
+                policy_name TEXT NOT NULL,
+                min_quantity INTEGER NOT NULL,
+                max_quantity INTEGER,
+                shipping_fee INTEGER NOT NULL DEFAULT 0,
+                shipping_type TEXT NOT NULL DEFAULT '구간형',
+                is_active INTEGER NOT NULL DEFAULT 1,
+                memo TEXT,
+                notion_page_id TEXT NOT NULL,
+                notion_last_edited_time TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
+            )
+            """
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_product_shipping_policies_product "
+            "ON product_shipping_policies(product_id, is_active, min_quantity)"
+        )
+
+    def _migrate_product_shipping_policies_table(self, connection: sqlite3.Connection) -> None:
+        """Ensure `shipping_type` column exists and relax notion_page_id unique constraint.
+
+        This operation is idempotent. If the existing table has a UNIQUE index on
+        `notion_page_id`, a new table with the desired schema will be created and
+        data copied across, then the old table replaced. Otherwise only adds the
+        missing `shipping_type` column.
+        """
+        rows = connection.execute("PRAGMA table_info(product_shipping_policies)").fetchall()
+        existing = {row["name"] for row in rows}
+        if "shipping_type" not in existing:
+            connection.execute(
+                "ALTER TABLE product_shipping_policies ADD COLUMN shipping_type TEXT NOT NULL DEFAULT '구간형'"
+            )
+
+        # Detect UNIQUE constraint on notion_page_id by inspecting indexes.
+        has_unique_notin = False
+        for idx in connection.execute("PRAGMA index_list(product_shipping_policies)").fetchall():
+            if idx[2]:
+                # idx[2] is 1 when unique
+                index_name = idx[1]
+                cols = [r[2] for r in connection.execute(f"PRAGMA index_info({index_name})").fetchall()]
+                if cols == ["notion_page_id"]:
+                    has_unique_notin = True
+                    break
+
+        if not has_unique_notin:
+            return
+
+        # Need to recreate table without unique constraint on notion_page_id.
+        connection.execute("PRAGMA foreign_keys = OFF")
+        connection.execute("BEGIN TRANSACTION")
+        try:
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS product_shipping_policies_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    product_id INTEGER NOT NULL,
+                    policy_name TEXT NOT NULL,
+                    min_quantity INTEGER NOT NULL,
+                    max_quantity INTEGER,
+                    shipping_fee INTEGER NOT NULL DEFAULT 0,
+                    shipping_type TEXT NOT NULL DEFAULT '구간형',
+                    is_active INTEGER NOT NULL DEFAULT 1,
+                    memo TEXT,
+                    notion_page_id TEXT NOT NULL,
+                    notion_last_edited_time TEXT,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
+                )
+                """
+            )
+            # Copy data across
+            connection.execute(
+                "INSERT INTO product_shipping_policies_new (id, product_id, policy_name, min_quantity, max_quantity, shipping_fee, shipping_type, is_active, memo, notion_page_id, notion_last_edited_time, created_at, updated_at) SELECT id, product_id, policy_name, min_quantity, max_quantity, shipping_fee, COALESCE(shipping_type, '구간형'), is_active, memo, notion_page_id, notion_last_edited_time, created_at, updated_at FROM product_shipping_policies"
+            )
+            connection.execute("DROP TABLE product_shipping_policies")
+            connection.execute("ALTER TABLE product_shipping_policies_new RENAME TO product_shipping_policies")
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_product_shipping_policies_product ON product_shipping_policies(product_id, is_active, min_quantity)"
+            )
+            connection.execute("COMMIT")
+        except Exception:
+            connection.execute("ROLLBACK")
+            raise
+        finally:
+            connection.execute("PRAGMA foreign_keys = ON")
 
 
     def _migrate_supplier_product_conditions_table(
@@ -364,6 +465,53 @@ class Database:
             )
             """
         )
+    def _migrate_purchase_orders_table(
+        self,
+        connection: sqlite3.Connection,
+    ) -> None:
+        """Add missing columns to purchase_orders in an idempotent way.
+
+        Only adds columns when they do not already exist. Does not modify
+        or recreate the table or existing data.
+        """
+        rows = connection.execute("PRAGMA table_info(purchase_orders)").fetchall()
+        existing = {row["name"] for row in rows}
+
+        columns = {
+            "supplier_product_code": "TEXT",
+            "unit_price": "INTEGER NOT NULL DEFAULT 0",
+            "item_amount": "INTEGER NOT NULL DEFAULT 0",
+            "shipping_fee": "INTEGER NOT NULL DEFAULT 0",
+            "carrier": "TEXT",
+            "purchase_round": "TEXT",
+        }
+
+        for name, definition in columns.items():
+            if name not in existing:
+                connection.execute(
+                    f"ALTER TABLE purchase_orders ADD COLUMN {name} {definition}"
+                )
+
+    def _migrate_order_items_table(
+        self,
+        connection: sqlite3.Connection,
+    ) -> None:
+        """기존 주문상품을 보존하며 미발주 취소 기록 컬럼만 추가합니다."""
+        columns = {
+            str(row[1])
+            for row in connection.execute("PRAGMA table_info(order_items)")
+        }
+        additions = {
+            "cancellation_status": "TEXT NOT NULL DEFAULT '정상'",
+            "cancellation_reason": "TEXT",
+            "cancelled_at": "TEXT",
+            "cancellation_requested_at": "TEXT",
+        }
+        for column, definition in additions.items():
+            if column not in columns:
+                connection.execute(
+                    f"ALTER TABLE order_items ADD COLUMN {column} {definition}"
+                )
 
     def _create_payments_table(
         self,
