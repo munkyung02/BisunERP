@@ -12,6 +12,10 @@ from openpyxl.utils import get_column_letter
 
 from modules.templates import get_purchase_template
 from modules.products.product_shipping_policy_repository import ProductShippingPolicyRepository
+from modules.purchases.purchase_quantity_policy import (
+    calculate_purchase_quantity,
+    option_unit_multiplier,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -159,6 +163,7 @@ class PurchaseService:
                 self._purchase_quantity(
                     item.get("quantity"),
                     item.get("option_name"),
+                    platform=item.get("platform"),
                 )
             )
             item["item_amount"] = (
@@ -1187,53 +1192,20 @@ class PurchaseService:
 
         무게·용량 숫자(500g, 1kg 등)는 수량으로 보지 않습니다.
         """
-        if option_name in (None, ""):
-            return 1
-
-        text = str(option_name).strip()
-
-        if not text:
-            return 1
-
-        patterns = (
-            r"(?<!\d)(\d+)\s*(?:개|팩|봉|박스|세트)\s*입\b",
-            r"(?<!\d)(\d+)\s*(?:개|팩|봉|박스|세트)(?![가-힣])",
-        )
-
-        for pattern in patterns:
-            match = re.search(
-                pattern,
-                text,
-                flags=re.IGNORECASE,
-            )
-
-            if match is not None:
-                value = int(match.group(1))
-
-                if value > 0:
-                    return value
-
-        return 1
+        return option_unit_multiplier(option_name)
 
     @classmethod
     def _purchase_quantity(
         cls,
         order_quantity: Any,
         option_name: Any,
+        *,
+        platform: Any = None,
     ) -> int:
-        try:
-            base_quantity = int(order_quantity or 1)
-        except (TypeError, ValueError):
-            base_quantity = 1
-
-        if base_quantity <= 0:
-            base_quantity = 1
-
-        return (
-            base_quantity
-            * cls._option_unit_multiplier(
-                option_name
-            )
+        return calculate_purchase_quantity(
+            order_quantity,
+            option_name,
+            platform=platform,
         )
 
     @staticmethod

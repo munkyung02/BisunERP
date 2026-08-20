@@ -1,7 +1,11 @@
-import re
 import sqlite3
 from pathlib import Path
 from typing import Any
+
+from modules.purchases.purchase_quantity_policy import (
+    calculate_purchase_quantity,
+    option_unit_multiplier,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -47,53 +51,20 @@ class PurchaseRepository:
 
         무게·용량 숫자(500g, 1kg 등)는 수량으로 보지 않습니다.
         """
-        if option_name in (None, ""):
-            return 1
-
-        text = str(option_name).strip()
-
-        if not text:
-            return 1
-
-        patterns = (
-            r"(?<!\d)(\d+)\s*(?:개|팩|봉|박스|세트)\s*입\b",
-            r"(?<!\d)(\d+)\s*(?:개|팩|봉|박스|세트)(?![가-힣])",
-        )
-
-        for pattern in patterns:
-            match = re.search(
-                pattern,
-                text,
-                flags=re.IGNORECASE,
-            )
-
-            if match is not None:
-                value = int(match.group(1))
-
-                if value > 0:
-                    return value
-
-        return 1
+        return option_unit_multiplier(option_name)
 
     @classmethod
     def _purchase_quantity(
         cls,
         order_quantity: Any,
         option_name: Any,
+        *,
+        platform: Any = None,
     ) -> int:
-        try:
-            base_quantity = int(order_quantity or 1)
-        except (TypeError, ValueError):
-            base_quantity = 1
-
-        if base_quantity <= 0:
-            base_quantity = 1
-
-        return (
-            base_quantity
-            * cls._option_unit_multiplier(
-                option_name
-            )
+        return calculate_purchase_quantity(
+            order_quantity,
+            option_name,
+            platform=platform,
         )
 
     @staticmethod
@@ -535,6 +506,7 @@ class PurchaseRepository:
                     oi.platform_product_name,
                     oi.option_name AS item_option_name,
                     oi.quantity,
+                    o.platform,
                     o.order_number,
                     o.receiver_name,
                     o.receiver_phone,
@@ -636,6 +608,7 @@ class PurchaseRepository:
                         self._purchase_quantity(
                             row["quantity"],
                             option_name,
+                            platform=row["platform"],
                         ),
                         row["receiver_name"],
                         row["receiver_phone"],
