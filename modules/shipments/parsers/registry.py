@@ -5,12 +5,14 @@ from pathlib import Path
 from .base_parser import BaseShipmentParser
 from .foodpresident_parser import FoodPresidentShipmentParser
 from .haedam_parser import HaedamShipmentParser
+from .juyeong_parser import JuyeongShipmentParser
 from .oehyeon_parser import OehyeonShipmentParser
 from .standard_parser import StandardShipmentParser
 
 
 PARSER_CLASSES: list[type[BaseShipmentParser]] = [
     FoodPresidentShipmentParser,
+    JuyeongShipmentParser,
     StandardShipmentParser,
     HaedamShipmentParser,
     OehyeonShipmentParser,

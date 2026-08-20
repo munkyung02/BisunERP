@@ -12,6 +12,7 @@ from .juyeong_template import JuyeongSeafoodPurchaseTemplate
 from .mangob2b_template import MangoB2BPuchaseTemplate
 from .wahyun_template import WahyunFarmPurchaseTemplate
 from .master_template import MasterYutongPurchaseTemplate
+from .mago_template import MagoPurchaseTemplate
 
 
 TEMPLATE_CLASSES: dict[str, type[PurchaseTemplate]] = {
@@ -23,6 +24,7 @@ TEMPLATE_CLASSES: dict[str, type[PurchaseTemplate]] = {
     MangoB2BPuchaseTemplate.template_key: MangoB2BPuchaseTemplate,
     WahyunFarmPurchaseTemplate.template_key: WahyunFarmPurchaseTemplate,
     MasterYutongPurchaseTemplate.template_key: MasterYutongPurchaseTemplate,
+    MagoPurchaseTemplate.template_key: MagoPurchaseTemplate,
 }
 
 CONFIG_PATH = Path(__file__).with_name(
